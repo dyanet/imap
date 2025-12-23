@@ -1,0 +1,118 @@
+{
+  "name": "@dyanet/imap",
+  "version": "0.1.0",
+  "description": "A modern, zero-dependency TypeScript IMAP client library - drop-in replacement for imap-simple and imap packages",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    },
+    "./types": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/types/index.js",
+      "require": "./dist/types/index.js"
+    },
+    "./encoding": {
+      "types": "./dist/encoding/index.d.ts",
+      "import": "./dist/encoding/index.js",
+      "require": "./dist/encoding/index.js"
+    },
+    "./protocol": {
+      "types": "./dist/protocol/index.d.ts",
+      "import": "./dist/protocol/index.js",
+      "require": "./dist/protocol/index.js"
+    },
+    "./commands": {
+      "types": "./dist/commands/index.d.ts",
+      "import": "./dist/commands/index.js",
+      "require": "./dist/commands/index.js"
+    },
+    "./mime": {
+      "types": "./dist/mime/index.d.ts",
+      "import": "./dist/mime/index.js",
+      "require": "./dist/mime/index.js"
+    },
+    "./transport": {
+      "types": "./dist/transport/index.d.ts",
+      "import": "./dist/transport/index.js",
+      "require": "./dist/transport/index.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "types": [
+        "dist/types/index.d.ts"
+      ],
+      "encoding": [
+        "dist/encoding/index.d.ts"
+      ],
+      "protocol": [
+        "dist/protocol/index.d.ts"
+      ],
+      "commands": [
+        "dist/commands/index.d.ts"
+      ],
+      "mime": [
+        "dist/mime/index.d.ts"
+      ],
+      "transport": [
+        "dist/transport/index.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "imap",
+    "imap-simple",
+    "imap-simple-replacement",
+    "email",
+    "mail",
+    "mailbox",
+    "inbox",
+    "typescript",
+    "zero-dependency",
+    "mime",
+    "imap4",
+    "imap-client",
+    "email-client",
+    "mail-client",
+    "node-imap",
+    "imap-replacement",
+    "async-imap",
+    "promise-imap"
+  ],
+  "author": "Dyanet",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dyanet/imap.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dyanet/imap/issues"
+  },
+  "homepage": "https://github.com/dyanet/imap#readme",
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@vitest/coverage-v8": "^1.6.1",
+    "fast-check": "^3.15.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "sideEffects": false
+}
