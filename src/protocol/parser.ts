@@ -123,14 +123,16 @@ export function parseUntaggedResponse(line: string): UntaggedResponse {
   
   // Check for FETCH response first (before generic numeric match)
   // FETCH responses have format: * N FETCH (...)
-  const fetchMatch = content.match(/^(\d+)\s+FETCH\s+(.*)$/i);
+  // Use [\s\S]* instead of .* to match across newlines (literal data may contain newlines)
+  const fetchMatch = content.match(/^(\d+)\s+FETCH\s+([\s\S]*)$/i);
   if (fetchMatch) {
     const seqno = parseInt(fetchMatch[1], 10);
     const fetchData = fetchMatch[2];
     const { tokens } = tokenize(fetchData);
+    const attributes = parseFetchAttributes(tokens);
     return {
       type: 'FETCH',
-      data: { seqno, attributes: parseFetchAttributes(tokens) },
+      data: { seqno, attributes },
       raw: line
     };
   }

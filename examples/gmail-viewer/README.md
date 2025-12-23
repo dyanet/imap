@@ -1,14 +1,23 @@
-# Gmail Viewer Example
+# Gmail Viewer Web App
 
-A simple example application demonstrating how to use `@dyanet/imap` to connect to Gmail and view emails using OAuth2 authentication.
+A secure web-based Gmail viewer demonstrating `@dyanet/imap` with OAuth2 authentication.
+
+## Features
+
+- 🔐 Secure OAuth2 authentication with Google
+- 🛡️ Security headers via Helmet
+- 🔒 CSRF protection with state parameter
+- 🍪 Secure session management
+- 🔄 Automatic token refresh
+- 📧 View inbox emails with sender, subject, and date
 
 ## Prerequisites
 
 - Node.js 20.0.0 or higher
 - A Google Cloud project with Gmail API enabled
-- OAuth2 credentials (Desktop application type)
+- OAuth2 credentials (Web application type)
 
-## Quick Start
+## Setup
 
 ### 1. Create Google Cloud OAuth2 Credentials
 
@@ -20,168 +29,96 @@ A simple example application demonstrating how to use `@dyanet/imap` to connect 
 4. Create OAuth2 credentials:
    - Go to "APIs & Services" > "Credentials"
    - Click "Create Credentials" > "OAuth client ID"
-   - Select "Desktop application" as the application type
-   - Download the credentials JSON file
-5. Configure OAuth consent screen:
-   - Add `http://localhost:3000/callback` as an authorized redirect URI
+   - Select "Web application" as the application type
+   - Add `http://localhost:3000/callback` to "Authorized redirect URIs"
+   - Save your Client ID and Client Secret
 
-### 2. Install Dependencies
+### 2. Configure Environment Variables
+
+Create a `.env` file or set environment variables:
+
+```bash
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-client-secret
+SESSION_SECRET=your-random-secret-key  # Optional, auto-generated if not set
+PORT=3000                               # Optional, defaults to 3000
+BASE_URL=http://localhost:3000          # Optional, for production deployment
+```
+
+### 3. Install Dependencies
 
 ```bash
 npm install
 ```
 
-### 3. Authorize with Gmail
-
-Run the authorization command to get your OAuth2 tokens:
+### 4. Build and Run
 
 ```bash
-npm run auth
-```
-
-This will:
-1. Prompt for your Google Client ID and Secret (if not in environment)
-2. Open your browser to Google's authorization page
-3. Start a local server to receive the callback
-4. Exchange the authorization code for access and refresh tokens
-5. Display the tokens to save in your `.env` file
-
-### 4. Run the Gmail Viewer
-
-```bash
+npm run build
 npm start
 ```
 
-## Available Commands
-
-| Command | Description |
-|---------|-------------|
-| `npm run auth` | Perform OAuth2 authorization flow to get tokens |
-| `npm run refresh` | Refresh an expired access token |
-| `npm start` | Run the Gmail viewer |
-| `npm run dev` | Build and run in one step |
-| `npm run build` | Compile TypeScript only |
-
-## Configuration
-
-### Environment Variables
-
-Create a `.env` file with your credentials:
+Or for development:
 
 ```bash
-cp .env.example .env
+npm run dev
 ```
+
+### 5. Open in Browser
+
+Navigate to `http://localhost:3000` and sign in with your Google account.
+
+## Security Features
+
+- **Helmet**: Sets secure HTTP headers (CSP, X-Frame-Options, etc.)
+- **CSRF Protection**: OAuth2 state parameter prevents cross-site request forgery
+- **Secure Sessions**: HTTP-only cookies with SameSite protection
+- **No Credentials Storage**: Access tokens stored only in session, not persisted
+- **Token Refresh**: Automatic token refresh when expired
+
+## Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `GMAIL_USER` | Yes | Your Gmail address |
-| `GMAIL_ACCESS_TOKEN` | Yes | OAuth2 access token |
-| `GOOGLE_CLIENT_ID` | For refresh | OAuth2 client ID |
-| `GOOGLE_CLIENT_SECRET` | For refresh | OAuth2 client secret |
-| `GOOGLE_REFRESH_TOKEN` | For refresh | Refresh token for auto-renewal |
+| `GOOGLE_CLIENT_ID` | Yes | Google OAuth2 Client ID |
+| `GOOGLE_CLIENT_SECRET` | Yes | Google OAuth2 Client Secret |
+| `SESSION_SECRET` | No | Secret for session encryption (auto-generated if not set) |
+| `PORT` | No | Server port (default: 3000) |
+| `BASE_URL` | No | Base URL for OAuth callbacks (default: http://localhost:PORT) |
+| `NODE_ENV` | No | Set to "production" for secure cookies |
 
-### Manual Token Setup (Alternative)
+## Production Deployment
 
-If you prefer to get tokens manually using the OAuth2 Playground:
+For production:
 
-1. Go to [OAuth2 Playground](https://developers.google.com/oauthplayground/)
-2. Click the gear icon (⚙️) and check "Use your own OAuth credentials"
-3. Enter your Client ID and Client Secret
-4. In Step 1, select "Gmail API v1" > "https://mail.google.com/"
-5. Click "Authorize APIs" and sign in with your Gmail account
-6. In Step 2, click "Exchange authorization code for tokens"
-7. Copy the tokens to your `.env` file
+1. Set `NODE_ENV=production` for secure cookies
+2. Use HTTPS and set `BASE_URL` to your domain
+3. Set a strong `SESSION_SECRET`
+4. Update OAuth2 redirect URIs in Google Cloud Console
 
-## Usage
-
-The application will:
-1. Connect to Gmail's IMAP server using OAuth2
-2. Open your INBOX
-3. Display the latest 10 emails with:
-   - Subject
-   - From address
-   - Date received
-4. Show a "...more" indicator if there are additional emails
-
-### Interactive Mode
-
-If no credentials are found in environment variables, the app will prompt you interactively:
-
-```
-📧 Gmail Viewer - @dyanet/imap Example
-======================================
-
-No credentials found in environment variables.
-Please enter your Gmail OAuth2 credentials:
-
-Gmail address: user@gmail.com
-Access token: ****
-```
-
-## Example Output
-
-```
-📧 Gmail Viewer - @dyanet/imap Example
-======================================
-
-Using credentials from environment for: user@gmail.com
-
-Connecting to Gmail...
-✓ Connected successfully
-
-Opening INBOX...
-✓ INBOX opened (42 messages, 3 unseen)
-
-Latest 10 emails:
-─────────────────────────────────────────────
-
-1. Meeting Tomorrow
-   From: colleague@company.com
-   Date: 01/15/2024, 10:30 AM
-
-2. Your order has shipped
-   From: orders@amazon.com
-   Date: 01/15/2024, 09:15 AM
-
-...
-
-─────────────────────────────────────────────
-...and 32 more emails in INBOX
-
-Disconnecting...
-✓ Disconnected
+```bash
+NODE_ENV=production \
+BASE_URL=https://your-domain.com \
+SESSION_SECRET=$(openssl rand -hex 32) \
+GOOGLE_CLIENT_ID=... \
+GOOGLE_CLIENT_SECRET=... \
+npm start
 ```
 
 ## Troubleshooting
 
-### "Invalid credentials" error
-- Your access token may have expired (tokens last ~1 hour)
-- Run `npm run refresh` to get a new token
-- Or run `npm run auth` to re-authorize
-
-### "IMAP access disabled" error
-- Enable IMAP in Gmail settings: Settings > See all settings > Forwarding and POP/IMAP
-- Make sure IMAP is enabled for your account
-
 ### "redirect_uri_mismatch" error
-- Add `http://localhost:3000/callback` to your OAuth2 credentials' authorized redirect URIs
-- Go to Google Cloud Console > APIs & Services > Credentials > Edit your OAuth client
+- Ensure `http://localhost:3000/callback` is in your OAuth2 authorized redirect URIs
+- For production, add your production callback URL
 
-### Connection timeout
-- Check your network connection
-- Gmail's IMAP server is `imap.gmail.com` on port 993 (TLS)
+### "Invalid credentials" error
+- Your access token may have expired
+- The app will automatically try to refresh it
+- If refresh fails, you'll be redirected to login
 
-### Port 3000 already in use
-- Another application is using port 3000
-- Stop the other application or modify `CALLBACK_PORT` in `oauth2.ts`
-
-## Development
-
-When developing locally, the example uses `file:../..` to reference the parent @dyanet/imap package. For production use, change the dependency to:
-
-```json
-"@dyanet/imap": "^0.2.0"
-```
+### Session issues
+- Clear your browser cookies for localhost
+- Restart the server
 
 ## License
 
