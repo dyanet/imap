@@ -30,8 +30,10 @@ export interface TokenizeResult {
 
 /**
  * IMAP special characters that delimit atoms
+ * Note: Backslash is NOT a delimiter for atoms - it's used in flags like \Seen, \Flagged
+ * Backslash is only special inside quoted strings
  */
-const ATOM_SPECIALS = new Set(['(', ')', '{', ' ', '\r', '\n', '"', '\\', '[', ']']);
+const ATOM_SPECIALS = new Set(['(', ')', '{', ' ', '\r', '\n', '"', '[', ']']);
 
 /**
  * Checks if a character is an atom special

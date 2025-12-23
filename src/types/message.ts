@@ -88,6 +88,8 @@ export interface MessageAttributes {
   envelope?: Envelope;
   /** Body structure */
   bodystructure?: BodyStructure;
+  /** CONDSTORE: Modification sequence number (RFC 7162) */
+  modseq?: bigint;
 }
 
 /**

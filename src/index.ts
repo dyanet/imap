@@ -37,3 +37,6 @@ export * from './transport/index.js';
 
 // Public API (Task 13)
 export { ImapClient } from './client.js';
+
+// IDLE extension types (Task 19)
+export type { IdleNotification, IdleController } from './client.js';

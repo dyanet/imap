@@ -19,6 +19,6 @@ export {
   isContinuationResponse
 } from './parser.js';
 
-export { ResponseParser } from './response-parser.js';
+export { ResponseParser, type CondstoreSearchResult } from './response-parser.js';
 
 export { ImapProtocol } from './imap-protocol.js';
