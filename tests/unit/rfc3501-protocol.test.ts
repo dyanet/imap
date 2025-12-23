@@ -448,3 +448,53 @@ describe('RFC 3501 Protocol Compliance', () => {
     });
   });
 });
+
+
+describe('RFC 7162 CONDSTORE/QRESYNC Extensions', () => {
+  describe('CONDSTORE Response Codes', () => {
+    it('should parse HIGHESTMODSEQ response code', () => {
+      const response = parseUntaggedResponse('* OK [HIGHESTMODSEQ 715194045007] Highest');
+      expect(response.type).toBe('OK');
+      const data = response.data as { code: string; text: string };
+      expect(data.code).toBe('HIGHESTMODSEQ 715194045007');
+    });
+
+    it('should parse NOMODSEQ response code', () => {
+      const response = parseUntaggedResponse('* OK [NOMODSEQ] No persistent mod-sequences');
+      expect(response.type).toBe('OK');
+      const data = response.data as { code: string; text: string };
+      expect(data.code).toBe('NOMODSEQ');
+    });
+  });
+
+  describe('FETCH with MODSEQ', () => {
+    it('should parse FETCH response with MODSEQ', () => {
+      const response = parseUntaggedResponse('* 1 FETCH (UID 123 FLAGS (\\Seen) MODSEQ (12345))');
+      expect(response.type).toBe('FETCH');
+      const data = response.data as { seqno: number; attributes: Record<string, unknown> };
+      expect(data.seqno).toBe(1);
+      expect(data.attributes.UID).toBe('123');
+      expect(data.attributes.MODSEQ).toBeDefined();
+    });
+
+    it('should parse FETCH response with large MODSEQ value', () => {
+      const response = parseUntaggedResponse('* 5 FETCH (UID 999 MODSEQ (715194045007))');
+      expect(response.type).toBe('FETCH');
+      const data = response.data as { seqno: number; attributes: Record<string, unknown> };
+      expect(data.seqno).toBe(5);
+      expect(data.attributes.MODSEQ).toBeDefined();
+    });
+  });
+
+  describe('VANISHED Response (QRESYNC)', () => {
+    it('should parse VANISHED response with UID range', () => {
+      const response = parseUntaggedResponse('* VANISHED 405,407,410:420');
+      expect(response.type).toBe('VANISHED');
+    });
+
+    it('should parse VANISHED EARLIER response', () => {
+      const response = parseUntaggedResponse('* VANISHED (EARLIER) 300:310,405');
+      expect(response.type).toBe('VANISHED');
+    });
+  });
+});

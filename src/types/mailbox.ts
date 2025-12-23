@@ -27,6 +27,8 @@ export interface Mailbox {
     /** Number of unseen messages */
     unseen: number;
   };
+  /** CONDSTORE: Highest modification sequence number (RFC 7162) */
+  highestModseq?: bigint;
 }
 
 /**
@@ -69,4 +71,46 @@ export interface MailboxStatus {
   uidvalidity: number;
   /** Next UID to be assigned */
   uidnext: number;
+}
+
+
+/**
+ * QRESYNC parameters for SELECT/EXAMINE commands (RFC 7162)
+ */
+export interface QresyncParams {
+  /** UIDVALIDITY value from previous session */
+  uidValidity: number;
+  /** Last known MODSEQ value from previous session */
+  lastKnownModseq: bigint;
+  /** Optional: Known UID set from previous session */
+  knownUids?: string;
+  /** Optional: Sequence match data for efficient resync */
+  sequenceMatch?: {
+    /** Sequence set */
+    seqSet: string;
+    /** UID set */
+    uidSet: string;
+  };
+}
+
+/**
+ * VANISHED response data (RFC 7162 QRESYNC)
+ */
+export interface VanishedResponse {
+  /** Whether this is an EARLIER response (from QRESYNC SELECT) */
+  earlier: boolean;
+  /** Array of vanished UIDs */
+  uids: number[];
+}
+
+/**
+ * QRESYNC mailbox resync result
+ */
+export interface QresyncResult {
+  /** The opened mailbox */
+  mailbox: Mailbox;
+  /** UIDs that have been expunged since last sync */
+  vanished: number[];
+  /** Whether VANISHED responses were from EARLIER (initial sync) */
+  vanishedEarlier: boolean;
 }

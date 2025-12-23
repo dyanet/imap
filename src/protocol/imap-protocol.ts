@@ -34,6 +34,17 @@ interface PendingCommand {
 }
 
 /**
+ * IDLE session state
+ */
+interface IdleSession {
+  tag: string;
+  resolve: (response: ImapResponse) => void;
+  reject: (error: Error) => void;
+  untagged: UntaggedResponse[];
+  timeoutId?: NodeJS.Timeout;
+}
+
+/**
  * ImapProtocol class wrapping connection
  * Handles tag generation, command execution, response correlation,
  * literal handling, and timeout management.
@@ -47,6 +58,8 @@ export class ImapProtocol extends EventEmitter {
   private defaultTimeout: number;
   private literalPending: { size: number; callback: (data: Buffer) => void } | null = null;
   private literalBuffer: Buffer = Buffer.alloc(0);
+  private idleSession: IdleSession | null = null;
+  private _isIdling: boolean = false;
 
   constructor(connection: ImapConnection, options?: { timeout?: number; tagPrefix?: string }) {
     super();
@@ -75,6 +88,9 @@ export class ImapProtocol extends EventEmitter {
     });
 
     this.connection.on('error', (err: Error) => {
+      // Abort IDLE session if active
+      this.abortIdle();
+      
       // Reject all pending commands
       for (const pending of this.pendingCommands.values()) {
         if (pending.timeoutId) {
@@ -87,6 +103,9 @@ export class ImapProtocol extends EventEmitter {
     });
 
     this.connection.on('close', () => {
+      // Abort IDLE session if active
+      this.abortIdle();
+      
       // Reject all pending commands
       for (const pending of this.pendingCommands.values()) {
         if (pending.timeoutId) {
@@ -220,13 +239,20 @@ export class ImapProtocol extends EventEmitter {
       return;
     }
 
-    // This is an untagged response - add to all pending commands
+    // This is an untagged response
     const parsed = parseResponse([trimmed]);
     if (parsed.untagged.length > 0) {
+      // Add to IDLE session if active
+      if (this._isIdling && this.idleSession) {
+        this.idleSession.untagged.push(...parsed.untagged);
+      }
+      
+      // Add to all pending commands
       for (const pending of this.pendingCommands.values()) {
         pending.untagged.push(...parsed.untagged);
       }
-      // Also emit for listeners
+      
+      // Emit for listeners (important for IDLE notifications)
       for (const untagged of parsed.untagged) {
         this.emit('untagged', untagged);
       }
@@ -251,6 +277,41 @@ export class ImapProtocol extends EventEmitter {
     if (!parsed.tagged) return;
     
     const { tag, status, text } = parsed.tagged;
+
+    // Check if this is an IDLE session response
+    if (this.idleSession && this.idleSession.tag === tag) {
+      const session = this.idleSession;
+      
+      // Clear timeout
+      if (session.timeoutId) {
+        clearTimeout(session.timeoutId);
+      }
+      
+      // Reset IDLE state
+      this._isIdling = false;
+      this.idleSession = null;
+      
+      // Create response
+      const response: ImapResponse = {
+        tag,
+        type: status,
+        text,
+        untagged: session.untagged
+      };
+      
+      // Resolve or reject based on status
+      if (status === 'OK') {
+        session.resolve(response);
+      } else {
+        session.reject(new ImapProtocolError(
+          `IDLE failed: ${text}`,
+          text,
+          'IDLE'
+        ));
+      }
+      return;
+    }
+    
     const pending = this.pendingCommands.get(tag);
     
     if (!pending) {
@@ -495,5 +556,148 @@ export class ImapProtocol extends EventEmitter {
    */
   getDefaultTimeout(): number {
     return this.defaultTimeout;
+  }
+
+  /**
+   * Whether the protocol is currently in IDLE mode
+   */
+  get isIdling(): boolean {
+    return this._isIdling;
+  }
+
+  /**
+   * Enter IDLE mode (RFC 2177)
+   * 
+   * IDLE mode allows the server to push notifications about mailbox changes.
+   * The server will send untagged responses for EXISTS, EXPUNGE, FETCH, etc.
+   * Call exitIdle() to terminate IDLE mode.
+   * 
+   * @param options - Options for IDLE mode
+   * @returns Promise that resolves when IDLE mode is entered (continuation received)
+   * @throws ImapProtocolError if server rejects IDLE
+   * @throws ImapTimeoutError if operation times out
+   */
+  enterIdle(options?: { timeout?: number }): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (this._isIdling) {
+        reject(new Error('Already in IDLE mode'));
+        return;
+      }
+
+      const tag = this.generateTag();
+      const timeout = options?.timeout ?? this.defaultTimeout;
+
+      // Create IDLE session
+      this.idleSession = {
+        tag,
+        resolve: () => {}, // Will be set when exiting
+        reject,
+        untagged: []
+      };
+
+      // Set up timeout for entering IDLE
+      let enterTimeoutId: NodeJS.Timeout | undefined;
+      if (timeout > 0) {
+        enterTimeoutId = setTimeout(() => {
+          if (!this._isIdling && this.idleSession) {
+            this.idleSession = null;
+            reject(new ImapTimeoutError(
+              `IDLE command timed out after ${timeout}ms`,
+              'IDLE',
+              timeout
+            ));
+          }
+        }, timeout);
+      }
+
+      // Handler for continuation response (server ready for IDLE)
+      const continuationHandler = () => {
+        if (enterTimeoutId) {
+          clearTimeout(enterTimeoutId);
+        }
+        this._isIdling = true;
+        this.removeListener('continuation', continuationHandler);
+        resolve();
+      };
+
+      // Listen for continuation
+      this.once('continuation', continuationHandler);
+
+      // Send IDLE command
+      try {
+        this.connection.sendLine(`${tag} IDLE`);
+      } catch (err) {
+        if (enterTimeoutId) {
+          clearTimeout(enterTimeoutId);
+        }
+        this.removeListener('continuation', continuationHandler);
+        this.idleSession = null;
+        reject(err);
+      }
+    });
+  }
+
+  /**
+   * Exit IDLE mode by sending DONE
+   * 
+   * @param options - Options for exiting IDLE
+   * @returns Promise that resolves with the IDLE response when server acknowledges
+   * @throws Error if not in IDLE mode
+   * @throws ImapTimeoutError if operation times out
+   */
+  exitIdle(options?: { timeout?: number }): Promise<ImapResponse> {
+    return new Promise((resolve, reject) => {
+      if (!this._isIdling || !this.idleSession) {
+        reject(new Error('Not in IDLE mode'));
+        return;
+      }
+
+      const timeout = options?.timeout ?? this.defaultTimeout;
+      const session = this.idleSession;
+
+      // Update session callbacks
+      session.resolve = resolve;
+      session.reject = reject;
+
+      // Set up timeout for DONE response
+      if (timeout > 0) {
+        session.timeoutId = setTimeout(() => {
+          this._isIdling = false;
+          this.idleSession = null;
+          reject(new ImapTimeoutError(
+            `DONE response timed out after ${timeout}ms`,
+            'DONE',
+            timeout
+          ));
+        }, timeout);
+      }
+
+      // Send DONE to exit IDLE
+      try {
+        this.connection.sendLine('DONE');
+      } catch (err) {
+        if (session.timeoutId) {
+          clearTimeout(session.timeoutId);
+        }
+        this._isIdling = false;
+        this.idleSession = null;
+        reject(err);
+      }
+    });
+  }
+
+  /**
+   * Abort IDLE mode immediately without waiting for server response
+   * Used for cleanup during disconnection
+   */
+  abortIdle(): void {
+    if (this.idleSession) {
+      if (this.idleSession.timeoutId) {
+        clearTimeout(this.idleSession.timeoutId);
+      }
+      this.idleSession.reject(new Error('IDLE aborted'));
+      this.idleSession = null;
+    }
+    this._isIdling = false;
   }
 }

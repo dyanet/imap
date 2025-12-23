@@ -13,6 +13,16 @@ import type { UntaggedResponse } from '../types/protocol.js';
 import type { Message, MessagePart, MessageAttributes } from '../types/message.js';
 
 /**
+ * CONDSTORE search result with MODSEQ (RFC 7162)
+ */
+export interface CondstoreSearchResult {
+  /** Array of message UIDs */
+  uids: number[];
+  /** Highest MODSEQ value of the returned messages */
+  highestModseq?: bigint;
+}
+
+/**
  * ResponseParser class for parsing IMAP command responses
  */
 export class ResponseParser {
@@ -278,6 +288,20 @@ export class ResponseParser {
       return;
     }
 
+    // Parse HIGHESTMODSEQ (CONDSTORE extension - RFC 7162)
+    const highestModseqMatch = code.match(/^HIGHESTMODSEQ\s+(\d+)/i);
+    if (highestModseqMatch) {
+      mailbox.highestModseq = BigInt(highestModseqMatch[1]);
+      return;
+    }
+
+    // Parse NOMODSEQ (CONDSTORE extension - RFC 7162)
+    // Indicates the mailbox does not support persistent mod-sequences
+    if (code.toUpperCase() === 'NOMODSEQ') {
+      mailbox.highestModseq = undefined;
+      return;
+    }
+
     // Parse READ-WRITE / READ-ONLY
     if (code.toUpperCase() === 'READ-WRITE') {
       mailbox.readOnly = false;
@@ -309,6 +333,88 @@ export class ResponseParser {
     }
 
     return uids;
+  }
+
+  /**
+   * Parses SEARCH response with CONDSTORE extension (RFC 7162)
+   * 
+   * CONDSTORE SEARCH responses may include MODSEQ:
+   * * SEARCH 1 2 3 (MODSEQ 12345)
+   * 
+   * @param responses - Array of UntaggedResponse objects or raw response lines
+   * @returns CondstoreSearchResult with UIDs and optional highestModseq
+   */
+  static parseCondstoreSearchResponse(responses: UntaggedResponse[] | string[]): CondstoreSearchResult {
+    const result: CondstoreSearchResult = {
+      uids: [],
+      highestModseq: undefined
+    };
+
+    for (const response of responses) {
+      const parsed = this.parseCondstoreSearchLine(response);
+      result.uids.push(...parsed.uids);
+      if (parsed.highestModseq !== undefined) {
+        result.highestModseq = parsed.highestModseq;
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Parses a single SEARCH response line with CONDSTORE support
+   */
+  private static parseCondstoreSearchLine(line: string | UntaggedResponse): CondstoreSearchResult {
+    const result: CondstoreSearchResult = {
+      uids: [],
+      highestModseq: undefined
+    };
+
+    // Handle UntaggedResponse objects
+    if (typeof line === 'object' && 'type' in line) {
+      if (line.type !== 'SEARCH') {
+        return result;
+      }
+      // Data should already be parsed as number array
+      if (Array.isArray(line.data)) {
+        result.uids = line.data.filter((n): n is number => typeof n === 'number');
+      }
+      // Check raw for MODSEQ
+      const modseqMatch = line.raw.match(/\(MODSEQ\s+(\d+)\)/i);
+      if (modseqMatch) {
+        result.highestModseq = BigInt(modseqMatch[1]);
+      }
+      return result;
+    }
+
+    // Handle raw string lines
+    const trimmed = line.trim();
+
+    // Check if it's a SEARCH response
+    const searchMatch = trimmed.match(/^\*\s+SEARCH\s*(.*)$/i);
+    if (!searchMatch) {
+      return result;
+    }
+
+    let content = searchMatch[1].trim();
+    
+    // Check for MODSEQ at the end: (MODSEQ 12345)
+    const modseqMatch = content.match(/\(MODSEQ\s+(\d+)\)\s*$/i);
+    if (modseqMatch) {
+      result.highestModseq = BigInt(modseqMatch[1]);
+      // Remove MODSEQ from content
+      content = content.replace(/\(MODSEQ\s+\d+\)\s*$/i, '').trim();
+    }
+
+    if (content) {
+      // Parse space-separated UIDs
+      result.uids = content
+        .split(/\s+/)
+        .map(s => parseInt(s, 10))
+        .filter(n => !isNaN(n));
+    }
+
+    return result;
   }
 
   /**
@@ -411,6 +517,28 @@ export class ResponseParser {
       }
     }
 
+    // Extract MODSEQ (CONDSTORE extension - RFC 7162)
+    let modseq: bigint | undefined;
+    if (attributes.MODSEQ !== undefined) {
+      // MODSEQ is returned as a parenthesized value like (12345)
+      const modseqValue = attributes.MODSEQ;
+      if (typeof modseqValue === 'string') {
+        // Remove parentheses if present
+        const cleanValue = modseqValue.replace(/[()]/g, '').trim();
+        modseq = BigInt(cleanValue);
+      } else if (typeof modseqValue === 'number') {
+        modseq = BigInt(modseqValue);
+      } else if (Array.isArray(modseqValue) && modseqValue.length > 0) {
+        // Handle case where MODSEQ is parsed as a list
+        const firstValue = modseqValue[0];
+        if (typeof firstValue === 'string') {
+          modseq = BigInt(firstValue);
+        } else if (typeof firstValue === 'number') {
+          modseq = BigInt(firstValue);
+        }
+      }
+    }
+
     // Extract body parts (BODY[...] or BODY.PEEK[...])
     for (const [key, value] of Object.entries(attributes)) {
       if (key.startsWith('BODY[') || key.startsWith('BODY.PEEK[')) {
@@ -428,7 +556,8 @@ export class ResponseParser {
       uid,
       flags,
       date,
-      size
+      size,
+      modseq
     };
 
     return {
