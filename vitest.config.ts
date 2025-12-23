@@ -32,11 +32,10 @@ export default defineConfig({
       exclude: ['src/**/*.d.ts'],
       thresholds: {
         global: {
-          // Set thresholds slightly below actual coverage to allow flexibility
-          statements: 60,
-          branches: 68,
-          functions: 73,
-          lines: 60
+          statements: 61,
+          branches: 75,
+          functions: 71,
+          lines: 61
         }
       }
     }

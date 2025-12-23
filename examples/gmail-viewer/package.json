@@ -1,6 +1,6 @@
 {
   "name": "gmail-viewer-example",
-  "version": "1.0.0",
+  "version": "0.5.0",
   "description": "Example Gmail email viewer using @dyanet/imap",
   "type": "module",
   "main": "dist/index.js",
@@ -20,7 +20,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@dyanet/imap": "file:../.."
+    "@dyanet/imap": "^0.5.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
