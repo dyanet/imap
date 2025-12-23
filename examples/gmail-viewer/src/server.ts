@@ -8,7 +8,9 @@ import express, { Request, Response, NextFunction } from 'express';
 import session from 'express-session';
 import helmet from 'helmet';
 import crypto from 'crypto';
+import { ConfigManager, SecretsManagerLoader, EnvironmentLoader } from '@dyanet/config-aws';
 import https from 'https';
+import { z } from 'zod';
 import { ImapClient, parseHeaders } from '@dyanet/imap';
 
 // Extend session data
@@ -21,12 +23,41 @@ declare module 'express-session' {
   }
 }
 
+// Define your configuration schema
+const schema = z.object({
+  GOOGLE_CLIENT_ID: z.string(),
+  GOOGLE_CLIENT_SECRET: z.string(),
+  SESSION_SECRET: z.string(),
+  BASE_URL: z.string(),
+  PORT: z.number().default(3000),
+});
+
+// Create and load configuration
+/* Three from the environment */
+const CONFIG_SSM_PREFIX = process.env.CONFIG_SSM_PREFIX || '/mail-example';
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ca-central-1';
+const configManager = new ConfigManager({
+  loaders: [
+    new EnvironmentLoader(),
+    new SecretsManagerLoader({ secretName: '/mail-example/config' }),
+  ],
+  // Schema may have different Zod typings across package boundaries; cast to any
+  schema: schema as any,
+  // Disable automatic validation during load to avoid throwing here; we'll rely on schema in future
+  validateOnLoad: false,
+  precedence: 'aws-first', // AWS sources override local
+});
+// Load configuration before using it (top-level await is supported in ESM)
+await configManager.load();
+const config = configManager.getAll() as Record<string, any>;
+
 // Configuration
-const PORT = parseInt(process.env.PORT || '3000', 10);
-const CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
-const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
-const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
-const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
+const CLIENT_ID = config.GOOGLE_CLIENT_ID;
+const CLIENT_SECRET = config.GOOGLE_CLIENT_SECRET;
+const PORT = config.PORT;
+const SESSION_SECRET = config.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+const BASE_URL= config.BASE_URL || `http://localhost:${config.PORT}`;
 const CALLBACK_PATH = '/callback';
 const GMAIL_SCOPES = ['https://mail.google.com/'];
 
