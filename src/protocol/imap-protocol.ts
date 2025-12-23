@@ -189,9 +189,6 @@ export class ImapProtocol extends EventEmitter {
    * Handle a literal marker in the response
    */
   private handleLiteralMarker(line: string, size: number): void {
-    // Find which pending command this belongs to
-    // For now, we'll associate it with the line content
-    
     // Set up literal reception
     this.literalPending = {
       size,
@@ -212,12 +209,95 @@ export class ImapProtocol extends EventEmitter {
 
   /**
    * Process a line that had literal data
+   * 
+   * IMAP FETCH responses with literals have this structure:
+   * * 1 FETCH (UID 123 BODY[HEADER] {100}
+   * <100 bytes of literal data>
+   * )
+   * 
+   * After the literal, there may be more data (like the closing paren)
+   * that comes on subsequent lines. We need to handle this properly.
    */
   private processLineWithLiteral(line: string, literalData: Buffer): void {
-    // Replace the literal marker with the actual data for parsing
     const lineWithoutLiteral = line.replace(/\{(\d+)\}\s*$/, '');
-    const fullLine = lineWithoutLiteral + literalData.toString('utf8');
-    this.processLine(fullLine);
+    const literalStr = literalData.toString('utf8');
+    
+    // Check if this looks like a FETCH response that needs the closing paren
+    if (lineWithoutLiteral.includes('FETCH') && lineWithoutLiteral.includes('(')) {
+      // Count open vs close parens to see if we need more data
+      const openCount = (lineWithoutLiteral.match(/\(/g) || []).length;
+      const closeCount = (lineWithoutLiteral.match(/\)/g) || []).length;
+      
+      if (openCount > closeCount) {
+        // We need to wait for the closing paren(s)
+        // Store the partial response and wait for more data
+        this.partialFetchLine = lineWithoutLiteral;
+        this.partialFetchLiteral = literalStr;
+        return;
+      }
+    }
+    
+    // For non-FETCH responses or complete responses, process directly
+    this.processCompleteFetchLine(lineWithoutLiteral, literalStr, '');
+  }
+
+  // Storage for partial FETCH responses
+  private partialFetchLine: string | null = null;
+  private partialFetchLiteral: string | null = null;
+
+  /**
+   * Process a complete FETCH line with literal data
+   * This directly constructs the UntaggedResponse without re-tokenizing
+   */
+  private processCompleteFetchLine(linePrefix: string, literalData: string, lineSuffix: string): void {
+    // Parse the FETCH response manually
+    // Format: * N FETCH (UID xxx FLAGS (...) BODY[...] <literal>)
+    const fetchMatch = linePrefix.match(/^\*\s+(\d+)\s+FETCH\s+\((.*)$/i);
+    if (!fetchMatch) {
+      // Not a FETCH response, fall back to normal processing
+      // This shouldn't happen but handle it gracefully
+      return;
+    }
+
+    const seqno = parseInt(fetchMatch[1], 10);
+    const attrPart = fetchMatch[2];
+    
+    // Parse attributes from the prefix (before the literal)
+    const attributes: Record<string, unknown> = {};
+    
+    // Extract UID
+    const uidMatch = attrPart.match(/UID\s+(\d+)/i);
+    if (uidMatch) {
+      attributes['UID'] = parseInt(uidMatch[1], 10);
+    }
+    
+    // Extract FLAGS
+    const flagsMatch = attrPart.match(/FLAGS\s+\(([^)]*)\)/i);
+    if (flagsMatch) {
+      attributes['FLAGS'] = flagsMatch[1].split(/\s+/).filter(f => f);
+    }
+    
+    // Extract BODY part name and associate with literal data
+    const bodyMatch = attrPart.match(/BODY(?:\.PEEK)?\[([^\]]*)\]\s*$/i);
+    if (bodyMatch) {
+      const bodyPartName = `BODY[${bodyMatch[1]}]`;
+      attributes[bodyPartName] = literalData;
+    }
+    
+    // Create the untagged response
+    const response: UntaggedResponse = {
+      type: 'FETCH',
+      data: { seqno, attributes },
+      raw: linePrefix + '{...}' + lineSuffix
+    };
+    
+    // Add to pending commands
+    for (const pending of this.pendingCommands.values()) {
+      pending.untagged.push(response);
+    }
+    
+    // Emit for listeners
+    this.emit('untagged', response);
   }
 
   /**
@@ -227,6 +307,28 @@ export class ImapProtocol extends EventEmitter {
     const trimmed = line.trim();
     if (!trimmed) return;
 
+    // Check if we have a partial FETCH response waiting for completion
+    if (this.partialFetchLine !== null && this.partialFetchLiteral !== null) {
+      // This line should contain the closing paren(s) for the FETCH response
+      const linePrefix = this.partialFetchLine;
+      const literalData = this.partialFetchLiteral;
+      
+      // Clear partial state
+      this.partialFetchLine = null;
+      this.partialFetchLiteral = null;
+      
+      // Process the complete FETCH response
+      this.processCompleteFetchLine(linePrefix, literalData, trimmed);
+      return;
+    }
+
+    this.processCompleteLine(trimmed);
+  }
+
+  /**
+   * Process a complete response line
+   */
+  private processCompleteLine(trimmed: string): void {
     // Check if this is a continuation response
     if (isContinuationResponse(trimmed)) {
       this.handleContinuation(trimmed);

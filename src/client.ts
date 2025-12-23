@@ -303,34 +303,122 @@ export class ImapClient extends EventEmitter {
       throw new ImapError('No protocol handler', 'NO_PROTOCOL', 'protocol');
     }
 
-    let command: string;
+    let response;
 
     // Check if XOAUTH2 authentication is configured
     if (this.config.imap.xoauth2) {
-      command = CommandBuilder.authenticateXOAuth2(
+      response = await this.authenticateXOAuth2(
         this.config.imap.xoauth2.user,
         this.config.imap.xoauth2.accessToken
       );
     } else if (this.config.imap.password) {
-      command = CommandBuilder.login(
+      const command = CommandBuilder.login(
         this.config.imap.user,
         this.config.imap.password
       );
+      response = await this.protocol.executeCommand(command, {
+        timeout: this.config.imap.authTimeout
+      });
     } else {
       throw new ImapError('No authentication credentials provided', 'NO_CREDENTIALS', 'protocol');
     }
-
-    const response = await this.protocol.executeCommand(command, {
-      timeout: this.config.imap.authTimeout
-    });
 
     // Parse capabilities from authentication response (may be included in OK response)
     this.parseCapabilitiesFromResponse(response.text);
     
     // If no capabilities were found, refresh them explicitly
+    // Use internal method that doesn't check connection state
     if (this._capabilities.size === 0) {
-      await this.refreshCapabilities();
+      await this.fetchCapabilities();
     }
+  }
+
+  /**
+   * Performs XOAUTH2 authentication with proper continuation handling.
+   * 
+   * XOAUTH2 authentication flow:
+   * 1. Client sends: AUTHENTICATE XOAUTH2 <base64-token>
+   * 2. Server responds with either:
+   *    - Tagged OK response (success)
+   *    - Continuation (+) with base64-encoded error JSON (failure)
+   * 3. On continuation, client sends empty line to get final tagged response
+   * 
+   * @param user - User email address
+   * @param accessToken - OAuth2 access token
+   * @returns Promise resolving to the authentication response
+   */
+  private async authenticateXOAuth2(user: string, accessToken: string): Promise<{ text: string }> {
+    if (!this.protocol || !this.connection) {
+      throw new ImapError('No protocol handler', 'NO_PROTOCOL', 'protocol');
+    }
+
+    // Capture references to avoid null checks in callbacks
+    const protocol = this.protocol;
+    const connection = this.connection;
+    const command = CommandBuilder.authenticateXOAuth2(user, accessToken);
+    
+    return new Promise((resolve, reject) => {
+      const timeout = this.config.imap.authTimeout ?? DEFAULT_AUTH_TIMEOUT;
+      let timeoutId: NodeJS.Timeout | undefined;
+      let continuationHandler: ((text: string) => void) | undefined;
+      let errorMessage: string | undefined;
+
+      // Set up timeout
+      if (timeout > 0) {
+        timeoutId = setTimeout(() => {
+          if (continuationHandler) {
+            protocol.removeListener('continuation', continuationHandler);
+          }
+          reject(new ImapError(`Authentication timed out after ${timeout}ms`, 'AUTH_TIMEOUT', 'timeout'));
+        }, timeout);
+      }
+
+      // Handle continuation response (authentication error from server)
+      continuationHandler = (text: string) => {
+        // Server sent a continuation with base64-encoded error
+        // Decode and store the error message
+        if (text) {
+          try {
+            const decoded = Buffer.from(text, 'base64').toString('utf8');
+            // Gmail sends JSON like: {"status":"400","schemes":"Bearer","scope":"https://mail.google.com/"}
+            errorMessage = decoded;
+          } catch {
+            errorMessage = text;
+          }
+        }
+        
+        // Send empty line to get the final tagged response
+        try {
+          connection.sendLine('');
+        } catch (err) {
+          if (timeoutId) clearTimeout(timeoutId);
+          protocol.removeListener('continuation', continuationHandler!);
+          reject(err);
+        }
+      };
+
+      protocol.once('continuation', continuationHandler);
+
+      // Execute the command
+      protocol.executeCommand(command, { timeout })
+        .then((response) => {
+          if (timeoutId) clearTimeout(timeoutId);
+          protocol.removeListener('continuation', continuationHandler!);
+          resolve(response);
+        })
+        .catch((err) => {
+          if (timeoutId) clearTimeout(timeoutId);
+          protocol.removeListener('continuation', continuationHandler!);
+          
+          // Enhance error message with decoded XOAUTH2 error if available
+          if (errorMessage && err instanceof Error) {
+            const enhancedMessage = `${err.message} (XOAUTH2 error: ${errorMessage})`;
+            reject(new ImapProtocolError(enhancedMessage, errorMessage, 'AUTHENTICATE'));
+          } else {
+            reject(err);
+          }
+        });
+    });
   }
 
   /**
@@ -621,8 +709,8 @@ export class ImapClient extends EventEmitter {
     this.ensureConnected();
     this.ensureMailboxSelected();
 
-    // Build and execute SEARCH command
-    const searchCommand = CommandBuilder.search(criteria);
+    // Build and execute UID SEARCH command to get UIDs (not sequence numbers)
+    const searchCommand = `UID ${CommandBuilder.search(criteria)}`;
     const searchResponse = await this.protocol!.executeCommand(searchCommand);
     
     // Parse UIDs from response
@@ -1053,9 +1141,21 @@ export class ImapClient extends EventEmitter {
    */
   async refreshCapabilities(): Promise<Set<string>> {
     this.ensureConnected();
+    return this.fetchCapabilities();
+  }
+
+  /**
+   * Internal method to fetch capabilities without connection check.
+   * Used during initial authentication when _isConnected is not yet true.
+   * @internal
+   */
+  private async fetchCapabilities(): Promise<Set<string>> {
+    if (!this.protocol) {
+      throw new ImapError('No protocol handler', 'NO_PROTOCOL', 'protocol');
+    }
 
     const command = CommandBuilder.capability();
-    const response = await this.protocol!.executeCommand(command);
+    const response = await this.protocol.executeCommand(command);
 
     // Parse capabilities from response
     this._capabilities.clear();

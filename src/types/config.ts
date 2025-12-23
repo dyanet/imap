@@ -14,6 +14,8 @@ export interface TlsOptions {
   cert?: string | Buffer;
   /** Client private key */
   key?: string | Buffer;
+  /** Server name for SNI (Server Name Indication) */
+  servername?: string;
 }
 
 /**

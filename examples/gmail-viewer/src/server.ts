@@ -254,11 +254,15 @@ async function fetchEmails(user: string, accessToken: string, limit: number = 20
       user,
       tls: true,
       xoauth2: { user, accessToken },
+      tlsOptions: {
+        servername: 'imap.gmail.com',
+      },
     },
   });
 
   try {
     await client.openBox('INBOX');
+    
     const uids = await client.search(['ALL']);
     const latestUids = uids.sort((a, b) => b - a).slice(0, limit);
 
@@ -431,7 +435,9 @@ app.get(CALLBACK_PATH, async (req, res) => {
 
 app.get('/inbox', requireAuth, async (req, res) => {
   try {
+    console.log('Fetching emails for:', req.session.user);
     const emails = await fetchEmails(req.session.user!, req.session.accessToken!);
+    console.log(`Fetched ${emails.length} emails`);
 
     const emailListHtml = emails.length > 0
       ? `<ul class="email-list">${emails.map(email => `
@@ -453,15 +459,18 @@ app.get('/inbox', requireAuth, async (req, res) => {
       </div>
     `, req.session.user));
   } catch (err) {
+    console.error('Error fetching emails:', err);
+    
     // Try to refresh token if authentication failed
     if (req.session.refreshToken && err instanceof Error && 
         (err.message.includes('AUTHENTICATIONFAILED') || err.message.includes('Invalid credentials'))) {
       try {
+        console.log('Attempting token refresh...');
         req.session.accessToken = await refreshAccessToken(req.session.refreshToken);
         res.redirect('/inbox');
         return;
-      } catch {
-        // Refresh failed, redirect to login
+      } catch (refreshErr) {
+        console.error('Token refresh failed:', refreshErr);
       }
     }
 
