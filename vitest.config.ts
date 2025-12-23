@@ -5,22 +5,26 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['tests/**/*.test.ts', 'tests/**/*.property.ts'],
-    // Exclude problematic test file that causes memory issues on Windows
-    exclude: ['tests/unit/rfc3501-protocol.test.ts', 'tests/unit/condstore-qresync.test.ts', 'node_modules/**'],
-    // Use threads pool with single thread to reduce memory issues
-    pool: 'threads',
+    exclude: ['node_modules/**'],
+    // Use forks pool for better memory isolation
+    pool: 'forks',
     poolOptions: {
-      threads: {
-        // Run all tests in a single thread
-        singleThread: true,
-        // Isolate test files
+      forks: {
+        // Run tests in separate processes for memory isolation
+        singleFork: true,
         isolate: true,
+        // Increase memory limit for worker processes (8GB)
+        execArgv: ['--max-old-space-size=8192'],
       }
     },
     // Increase test timeout for property tests
-    testTimeout: 30000,
+    testTimeout: 60000,
     // Disable file parallelism to reduce memory usage
     fileParallelism: false,
+    // Sequence tests to run smaller files first
+    sequence: {
+      shuffle: false,
+    },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
