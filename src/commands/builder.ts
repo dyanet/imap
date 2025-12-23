@@ -303,15 +303,13 @@ export class CommandBuilder {
       items.push('MODSEQ');
     }
 
-    // Build the base command
-    let command = `FETCH ${sequence} (${items.join(' ')})`;
+    // Build the command with optional CHANGEDSINCE modifier (CONDSTORE extension)
+    const itemsStr = items.join(' ');
+    const changedSinceModifier = options.changedSince !== undefined 
+      ? ` (CHANGEDSINCE ${options.changedSince.toString()})` 
+      : '';
 
-    // Add CHANGEDSINCE modifier if specified (CONDSTORE extension)
-    if (options.changedSince !== undefined) {
-      command = `FETCH ${sequence} (${items.join(' ')}) (CHANGEDSINCE ${options.changedSince.toString()})`;
-    }
-
-    return command;
+    return `FETCH ${sequence} (${itemsStr})${changedSinceModifier}`;
   }
 
   /**
