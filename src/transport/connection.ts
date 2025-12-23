@@ -171,7 +171,10 @@ export class ImapConnection extends EventEmitter {
    * Build TLS options from configuration
    */
   private buildTlsOptions(): tls.ConnectionOptions {
-    const opts: tls.ConnectionOptions = {};
+    const opts: tls.ConnectionOptions = {
+      // Default to using the host as servername for SNI
+      servername: this.options.host,
+    };
     
     if (this.options.tlsOptions) {
       const tlsOpts = this.options.tlsOptions;
@@ -187,6 +190,9 @@ export class ImapConnection extends EventEmitter {
       }
       if (tlsOpts.key) {
         opts.key = tlsOpts.key;
+      }
+      if (tlsOpts.servername) {
+        opts.servername = tlsOpts.servername;
       }
     }
     
