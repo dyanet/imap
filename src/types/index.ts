@@ -10,7 +10,10 @@ export type {
   Mailbox,
   MailboxTree,
   MailboxInfo,
-  MailboxStatus
+  MailboxStatus,
+  QresyncParams,
+  VanishedResponse,
+  QresyncResult
 } from './mailbox.js';
 
 // Message types
@@ -29,7 +32,8 @@ export type {
 export type {
   SearchCriteria,
   FetchOptions,
-  FetchResult
+  FetchResult,
+  CondstoreSearchOptions
 } from './search.js';
 
 // Protocol types

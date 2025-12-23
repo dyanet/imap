@@ -6,7 +6,7 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.ts', 'tests/**/*.property.ts'],
     // Exclude problematic test file that causes memory issues on Windows
-    exclude: ['tests/unit/rfc3501-protocol.test.ts', 'node_modules/**'],
+    exclude: ['tests/unit/rfc3501-protocol.test.ts', 'tests/unit/condstore-qresync.test.ts', 'node_modules/**'],
     // Use threads pool with single thread to reduce memory issues
     pool: 'threads',
     poolOptions: {

@@ -23,6 +23,7 @@ Both libraries have known security vulnerabilities and are incompatible with mod
 - **imap-simple Compatible**: Drop-in replacement API for easy migration
 - **Promise-Based**: Modern async/await API for all operations
 - **OAuth2 Support**: XOAUTH2 authentication for Gmail and Microsoft 365
+- **IMAP Extensions**: IDLE, CONDSTORE, QRESYNC support for real-time updates and efficient sync
 - **Small Footprint**: Target bundle size under 50KB
 
 ## Installation
@@ -167,13 +168,21 @@ Renames a mailbox.
 await client.renameBox('OldName', 'NewName');
 ```
 
-##### `search(criteria: SearchCriteria[], fetchOptions?: FetchOptions): Promise<Message[]>`
+##### `search(criteria: SearchCriteria[]): Promise<number[]>`
+##### `search(criteria: SearchCriteria[], fetchOptions: FetchOptions): Promise<Message[]>`
 
 Searches for messages matching the given criteria.
 
+When called without `fetchOptions`, returns an array of UIDs (`number[]`).
+When called with `fetchOptions`, returns an array of `Message` objects with fetched data.
+
 ```typescript
-// Simple search
-const messages = await client.search(['UNSEEN']);
+// Search for UIDs only
+const uids = await client.search(['UNSEEN']);
+console.log(uids); // [1, 2, 3]
+
+// Search and fetch message data
+const messages = await client.search(['UNSEEN'], { bodies: ['HEADER'] });
 
 // Multiple criteria (AND logic)
 const messages = await client.search([
@@ -235,6 +244,94 @@ Permanently removes messages marked with `\Deleted` flag.
 ```typescript
 await client.expunge();
 ```
+
+##### `idle(): Promise<IdleController>`
+
+Enters IDLE mode for real-time mailbox notifications (RFC 2177).
+
+```typescript
+const idle = await client.idle();
+
+idle.on('exists', (count) => {
+  console.log(`New message count: ${count}`);
+});
+
+idle.on('expunge', (seqno) => {
+  console.log(`Message ${seqno} was expunged`);
+});
+
+// Stop IDLE when done
+await idle.stop();
+```
+
+##### `watch(options?: { pollInterval?: number }): Promise<IdleController>`
+
+Starts watching the mailbox for changes. Uses IDLE if supported, otherwise falls back to polling.
+
+```typescript
+const watcher = await client.watch({ pollInterval: 30000 });
+
+watcher.on('exists', (count) => {
+  console.log(`New message count: ${count}`);
+});
+
+await watcher.stop();
+```
+
+##### `poll(): Promise<IdleNotification[]>`
+
+Polls the mailbox for changes using NOOP command. Fallback for servers without IDLE support.
+
+```typescript
+const notifications = await client.poll();
+for (const n of notifications) {
+  if (n.type === 'exists') {
+    console.log(`New message count: ${n.count}`);
+  }
+}
+```
+
+##### `openBoxWithQresync(mailboxName, qresync, readOnly?): Promise<QresyncResult>`
+
+Opens a mailbox with QRESYNC for quick resynchronization (RFC 7162).
+
+```typescript
+// Save state from previous session
+const savedState = {
+  uidValidity: box.uidvalidity,
+  lastKnownModseq: box.highestModseq
+};
+
+// Later session - resync efficiently
+const result = await client.openBoxWithQresync('INBOX', savedState);
+console.log('Vanished UIDs:', result.vanished);
+```
+
+##### `hasCapability(capability: string): boolean`
+
+Checks if the server supports a specific capability.
+
+```typescript
+if (client.hasCapability('IDLE')) {
+  const idle = await client.idle();
+}
+```
+
+##### `hasCondstore(): boolean`
+
+Checks if the server supports CONDSTORE extension (RFC 7162) for efficient flag synchronization.
+
+##### `hasQresync(): boolean`
+
+Checks if the server supports QRESYNC extension (RFC 7162) for quick mailbox resynchronization.
+
+##### `getCapabilities(): Set<string>`
+
+Returns all server capabilities.
+
+##### `refreshCapabilities(): Promise<Set<string>>`
+
+Refreshes and returns server capabilities.
 
 #### Properties
 
@@ -315,7 +412,6 @@ const client = await ImapClient.connect({
   }
 });
 ```
-```
 
 ### Search Criteria
 
@@ -350,12 +446,63 @@ Supported search criteria:
 
 ```typescript
 interface FetchOptions {
-  bodies?: string | string[];  // Body parts to fetch ('HEADER', 'TEXT', '')
+  bodies?: string | string[];  // Body parts to fetch
   struct?: boolean;            // Include body structure
   envelope?: boolean;          // Include envelope
   size?: boolean;              // Include size
   markSeen?: boolean;          // Mark as seen when fetching
 }
+```
+
+#### Body Parts (`bodies` option)
+
+The `bodies` option accepts various formats to fetch different parts of a message:
+
+| Value | Description |
+|-------|-------------|
+| `'HEADER'` | All message headers |
+| `'HEADER.FIELDS (FROM SUBJECT DATE)'` | Specific headers only |
+| `'HEADER.FIELDS.NOT (BCC)'` | All headers except specified |
+| `'TEXT'` | Message body (without headers) |
+| `''` (empty string) | Entire message (headers + body) |
+| `'1'` | First MIME part |
+| `'1.2'` | Nested MIME part (part 2 of part 1) |
+| `'1.HEADER'` | Headers of a specific MIME part |
+| `'1.TEXT'` | Body of a specific MIME part |
+
+Example usage:
+```typescript
+// Fetch only specific headers
+const messages = await client.fetch(uids, {
+  bodies: ['HEADER.FIELDS (FROM SUBJECT DATE)']
+});
+
+// Fetch headers and body text
+const messages = await client.fetch(uids, {
+  bodies: ['HEADER', 'TEXT']
+});
+
+// Fetch entire message
+const messages = await client.fetch(uids, {
+  bodies: ['']
+});
+```
+
+### Header Parsing
+
+The library exports a `parseHeaders()` utility for parsing raw header text:
+
+```typescript
+import { parseHeaders } from '@dyanet/imap';
+
+// Parse headers from a message part
+const headerPart = message.parts.find(p => p.which.includes('HEADER'));
+const headers = parseHeaders(headerPart.body.toString());
+
+// Access headers (keys are lowercase)
+const subject = headers.get('subject');  // string | string[]
+const from = headers.get('from');
+const date = headers.get('date');
 ```
 
 ### Standard Flags
@@ -365,6 +512,73 @@ interface FetchOptions {
 - `\Flagged` - Message is flagged
 - `\Deleted` - Message is marked for deletion
 - `\Draft` - Message is a draft
+
+## Extended Capabilities
+
+The library supports several IMAP extensions for advanced functionality. Use `hasCapability()` to check server support before using these features.
+
+### IDLE (RFC 2177)
+
+Real-time mailbox notifications without polling.
+
+```typescript
+if (client.hasCapability('IDLE')) {
+  const idle = await client.idle();
+  
+  idle.on('exists', (count) => console.log(`Messages: ${count}`));
+  idle.on('expunge', (seqno) => console.log(`Deleted: ${seqno}`));
+  idle.on('fetch', ({ seqno, flags }) => console.log(`Flags changed: ${seqno}`));
+  
+  // Stop when done
+  await idle.stop();
+}
+```
+
+### CONDSTORE (RFC 7162)
+
+Conditional STORE for efficient flag synchronization using MODSEQ values.
+
+```typescript
+if (client.hasCondstore()) {
+  const mailbox = await client.openBox('INBOX');
+  // mailbox.highestModseq contains the current MODSEQ value
+  console.log(`Highest MODSEQ: ${mailbox.highestModseq}`);
+}
+```
+
+### QRESYNC (RFC 7162)
+
+Quick mailbox resynchronization - efficiently sync after reconnection.
+
+```typescript
+if (client.hasQresync()) {
+  // Save state when disconnecting
+  const savedState = {
+    uidValidity: mailbox.uidvalidity,
+    lastKnownModseq: mailbox.highestModseq
+  };
+  
+  // On reconnect, get only changes
+  const result = await client.openBoxWithQresync('INBOX', savedState);
+  
+  console.log('Expunged UIDs:', result.vanished);
+  console.log('Current mailbox:', result.mailbox);
+}
+```
+
+### Capability Detection
+
+```typescript
+// Check specific capability
+if (client.hasCapability('IDLE')) { /* ... */ }
+
+// Get all capabilities
+const caps = client.getCapabilities();
+console.log('Server supports:', [...caps].join(', '));
+
+// Refresh capabilities (after authentication changes)
+await client.refreshCapabilities();
+```
 
 ## Error Handling
 
@@ -414,6 +628,36 @@ const connection = await ImapClient.connect(config);
 ```
 
 The configuration format and method signatures are compatible with imap-simple.
+
+## Examples
+
+### Gmail Viewer
+
+A complete example application is included in `examples/gmail-viewer/` demonstrating OAuth2 authentication with Gmail.
+
+#### Setup
+
+```bash
+cd examples/gmail-viewer
+npm install
+```
+
+#### Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run auth` | Perform OAuth2 authorization flow to obtain access tokens |
+| `npm run refresh` | Refresh an expired access token using stored refresh token |
+| `npm start` | Run the Gmail viewer to display recent emails |
+| `npm run dev` | Build and run in one step |
+
+#### Quick Start
+
+1. Create OAuth2 credentials in [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+2. Run `npm run auth` to authorize and get tokens
+3. Run `npm start` to view your emails
+
+See `examples/gmail-viewer/README.md` for detailed setup instructions.
 
 ## TypeScript Support
 

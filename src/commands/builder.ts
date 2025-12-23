@@ -181,10 +181,15 @@ export class CommandBuilder {
    * Multiple criteria are combined with AND logic (space-separated)
    * 
    * @param criteria - Array of search criteria
+   * @param options - Optional CONDSTORE search options
    * @returns SEARCH command string
    */
-  static search(criteria: SearchCriteria[]): string {
+  static search(criteria: SearchCriteria[], options?: { changedSince?: bigint }): string {
     if (criteria.length === 0) {
+      // If CHANGEDSINCE is specified, we need to include it even with ALL
+      if (options?.changedSince !== undefined) {
+        return `SEARCH ALL (CHANGEDSINCE ${options.changedSince.toString()})`;
+      }
       return 'SEARCH ALL';
     }
 
@@ -233,6 +238,11 @@ export class CommandBuilder {
             break;
         }
       }
+    }
+
+    // Add CHANGEDSINCE modifier if specified (CONDSTORE extension)
+    if (options?.changedSince !== undefined) {
+      return `SEARCH ${parts.join(' ')} (CHANGEDSINCE ${options.changedSince.toString()})`;
     }
 
     return `SEARCH ${parts.join(' ')}`;
@@ -288,7 +298,20 @@ export class CommandBuilder {
       items.push('RFC822.SIZE');
     }
 
-    return `FETCH ${sequence} (${items.join(' ')})`;
+    // Handle MODSEQ option (CONDSTORE extension)
+    if (options.modseq) {
+      items.push('MODSEQ');
+    }
+
+    // Build the base command
+    let command = `FETCH ${sequence} (${items.join(' ')})`;
+
+    // Add CHANGEDSINCE modifier if specified (CONDSTORE extension)
+    if (options.changedSince !== undefined) {
+      command = `FETCH ${sequence} (${items.join(' ')}) (CHANGEDSINCE ${options.changedSince.toString()})`;
+    }
+
+    return command;
   }
 
   /**
@@ -332,5 +355,85 @@ export class CommandBuilder {
    */
   static noop(): string {
     return 'NOOP';
+  }
+
+  /**
+   * Builds an IDLE command (RFC 2177)
+   * Used for real-time mailbox notifications
+   * 
+   * @returns IDLE command string
+   */
+  static idle(): string {
+    return 'IDLE';
+  }
+
+  /**
+   * Builds a CAPABILITY command
+   * Used to query server capabilities
+   * 
+   * @returns CAPABILITY command string
+   */
+  static capability(): string {
+    return 'CAPABILITY';
+  }
+
+  /**
+   * Builds a SELECT command with QRESYNC parameter (RFC 7162)
+   * Used for quick mailbox resynchronization
+   * 
+   * @param mailbox - Mailbox name
+   * @param qresync - QRESYNC parameters
+   * @returns SELECT command string with QRESYNC
+   */
+  static selectWithQresync(mailbox: string, qresync: {
+    uidValidity: number;
+    lastKnownModseq: bigint;
+    knownUids?: string;
+    sequenceMatch?: { seqSet: string; uidSet: string };
+  }): string {
+    const parts: string[] = [
+      qresync.uidValidity.toString(),
+      qresync.lastKnownModseq.toString()
+    ];
+
+    if (qresync.knownUids) {
+      parts.push(qresync.knownUids);
+      
+      if (qresync.sequenceMatch) {
+        parts.push(`(${qresync.sequenceMatch.seqSet} ${qresync.sequenceMatch.uidSet})`);
+      }
+    }
+
+    return `SELECT ${escapeString(mailbox)} (QRESYNC (${parts.join(' ')}))`;
+  }
+
+  /**
+   * Builds an EXAMINE command with QRESYNC parameter (RFC 7162)
+   * Used for quick mailbox resynchronization in read-only mode
+   * 
+   * @param mailbox - Mailbox name
+   * @param qresync - QRESYNC parameters
+   * @returns EXAMINE command string with QRESYNC
+   */
+  static examineWithQresync(mailbox: string, qresync: {
+    uidValidity: number;
+    lastKnownModseq: bigint;
+    knownUids?: string;
+    sequenceMatch?: { seqSet: string; uidSet: string };
+  }): string {
+    const parts: string[] = [
+      qresync.uidValidity.toString(),
+      qresync.lastKnownModseq.toString()
+    ];
+
+    if (qresync.knownUids) {
+      parts.push(qresync.knownUids);
+      
+      if (qresync.sequenceMatch) {
+        parts.push(`(${qresync.sequenceMatch.seqSet} ${qresync.sequenceMatch.uidSet})`);
+      }
+    }
+
+    return `EXAMINE ${escapeString(mailbox)} (QRESYNC (${parts.join(' ')}))`;
   }
 }

@@ -55,6 +55,26 @@ export interface FetchOptions {
   size?: boolean;
   /** Whether to mark messages as seen when fetching */
   markSeen?: boolean;
+  /**
+   * CONDSTORE: Only fetch messages changed since this MODSEQ value (RFC 7162)
+   * Requires CONDSTORE capability
+   */
+  changedSince?: bigint;
+  /**
+   * CONDSTORE: Whether to fetch MODSEQ values for messages
+   * Requires CONDSTORE capability
+   */
+  modseq?: boolean;
+}
+
+/**
+ * CONDSTORE search options (RFC 7162)
+ */
+export interface CondstoreSearchOptions {
+  /**
+   * Only return messages with MODSEQ greater than this value
+   */
+  changedSince?: bigint;
 }
 
 /**
@@ -77,4 +97,6 @@ export interface FetchResult {
   bodystructure?: import('./message.js').BodyStructure;
   /** Fetched body parts */
   parts: Map<string, string | Buffer>;
+  /** CONDSTORE: Message modification sequence number (RFC 7162) */
+  modseq?: bigint;
 }

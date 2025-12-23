@@ -121,6 +121,20 @@ export function parseUntaggedResponse(line: string): UntaggedResponse {
   
   const content = trimmed.slice(1).trim();
   
+  // Check for FETCH response first (before generic numeric match)
+  // FETCH responses have format: * N FETCH (...)
+  const fetchMatch = content.match(/^(\d+)\s+FETCH\s+(.*)$/i);
+  if (fetchMatch) {
+    const seqno = parseInt(fetchMatch[1], 10);
+    const fetchData = fetchMatch[2];
+    const { tokens } = tokenize(fetchData);
+    return {
+      type: 'FETCH',
+      data: { seqno, attributes: parseFetchAttributes(tokens) },
+      raw: line
+    };
+  }
+  
   // Check for numeric responses like "* 5 EXISTS" or "* 3 RECENT"
   const numericMatch = content.match(/^(\d+)\s+(\S+)(.*)$/);
   if (numericMatch) {
@@ -209,15 +223,14 @@ export function parseUntaggedResponse(line: string): UntaggedResponse {
     };
   }
   
-  // Check for FETCH response
-  const fetchMatch = content.match(/^(\d+)\s+FETCH\s+(.*)$/i);
-  if (fetchMatch) {
-    const seqno = parseInt(fetchMatch[1], 10);
-    const fetchData = fetchMatch[2];
-    const { tokens } = tokenize(fetchData);
+  // Check for VANISHED response (QRESYNC extension - RFC 7162)
+  // Format: * VANISHED 405,407,410:420 or * VANISHED (EARLIER) 300:310,405
+  if (content.toUpperCase().startsWith('VANISHED')) {
+    const vanishedContent = content.slice('VANISHED'.length).trim();
+    const parsed = parseVanishedResponse(vanishedContent);
     return {
-      type: 'FETCH',
-      data: { seqno, attributes: parseFetchAttributes(tokens) },
+      type: 'VANISHED',
+      data: parsed,
       raw: line
     };
   }
@@ -257,6 +270,59 @@ function extractFlags(tokens: Token[]): string[] {
   }
   
   return flags;
+}
+
+/**
+ * Parses VANISHED response content (QRESYNC extension - RFC 7162)
+ * Format: 405,407,410:420 or (EARLIER) 300:310,405
+ */
+function parseVanishedResponse(content: string): { earlier: boolean; uids: number[] } {
+  let earlier = false;
+  let uidStr = content;
+  
+  // Check for (EARLIER) modifier
+  const earlierMatch = content.match(/^\(EARLIER\)\s*(.*)$/i);
+  if (earlierMatch) {
+    earlier = true;
+    uidStr = earlierMatch[1];
+  }
+  
+  // Parse UID sequence set (e.g., "405,407,410:420")
+  const uids = parseUidSequenceSet(uidStr);
+  
+  return { earlier, uids };
+}
+
+/**
+ * Parses a UID sequence set into an array of UIDs
+ * Handles ranges (e.g., "1:5") and individual UIDs (e.g., "1,3,5")
+ */
+function parseUidSequenceSet(sequenceSet: string): number[] {
+  const uids: number[] = [];
+  const parts = sequenceSet.split(',');
+  
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    
+    // Check for range (e.g., "410:420")
+    const rangeMatch = trimmed.match(/^(\d+):(\d+)$/);
+    if (rangeMatch) {
+      const start = parseInt(rangeMatch[1], 10);
+      const end = parseInt(rangeMatch[2], 10);
+      for (let i = start; i <= end; i++) {
+        uids.push(i);
+      }
+    } else {
+      // Single UID
+      const uid = parseInt(trimmed, 10);
+      if (!isNaN(uid)) {
+        uids.push(uid);
+      }
+    }
+  }
+  
+  return uids;
 }
 
 /**
