@@ -1,5 +1,10 @@
 # @dyanet/imap
 
+[![CI](https://github.com/dyanet/imap/actions/workflows/ci.yml/badge.svg)](https://github.com/dyanet/imap/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/@dyanet/imap.svg)](https://www.npmjs.com/package/@dyanet/imap)
+[![npm downloads](https://img.shields.io/npm/dm/@dyanet/imap.svg)](https://www.npmjs.com/package/@dyanet/imap)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A modern, zero-dependency TypeScript IMAP client library that revives the discontinued [imap-simple](https://www.npmjs.com/package/imap-simple) package.
 
 ## Background
@@ -17,6 +22,7 @@ Both libraries have known security vulnerabilities and are incompatible with mod
 - **TypeScript First**: Written in TypeScript with strict mode, full type definitions included
 - **imap-simple Compatible**: Drop-in replacement API for easy migration
 - **Promise-Based**: Modern async/await API for all operations
+- **OAuth2 Support**: XOAUTH2 authentication for Gmail and Microsoft 365
 - **Small Footprint**: Target bundle size under 50KB
 
 ## Installation
@@ -254,12 +260,18 @@ interface ImapConfig {
     host: string;           // IMAP server hostname
     port?: number;          // Port (default: 993)
     user: string;           // Username
-    password: string;       // Password
+    password?: string;      // Password (for basic auth)
+    xoauth2?: XOAuth2Options; // OAuth2 auth (for Gmail, Microsoft 365)
     tls?: boolean;          // Use TLS (default: true)
     tlsOptions?: TlsOptions;
     authTimeout?: number;   // Auth timeout in ms (default: 30000)
     connTimeout?: number;   // Connection timeout in ms (default: 30000)
   };
+}
+
+interface XOAuth2Options {
+  user: string;             // User email address
+  accessToken: string;      // OAuth2 access token
 }
 
 interface TlsOptions {
@@ -268,6 +280,41 @@ interface TlsOptions {
   cert?: string | Buffer;
   key?: string | Buffer;
 }
+```
+
+### OAuth2 Authentication (Gmail, Microsoft 365)
+
+For Gmail and Microsoft 365, basic password authentication is deprecated. Use OAuth2 instead:
+
+```typescript
+// Gmail with OAuth2
+const client = await ImapClient.connect({
+  imap: {
+    host: 'imap.gmail.com',
+    port: 993,
+    user: 'user@gmail.com',
+    xoauth2: {
+      user: 'user@gmail.com',
+      accessToken: 'ya29.your-oauth2-access-token'
+    },
+    tls: true
+  }
+});
+
+// Microsoft 365 with OAuth2
+const client = await ImapClient.connect({
+  imap: {
+    host: 'outlook.office365.com',
+    port: 993,
+    user: 'user@company.onmicrosoft.com',
+    xoauth2: {
+      user: 'user@company.onmicrosoft.com',
+      accessToken: 'eyJ0eXAiOiJKV1Q...'
+    },
+    tls: true
+  }
+});
+```
 ```
 
 ### Search Criteria
@@ -390,7 +437,7 @@ import type {
 
 ## Requirements
 
-- Node.js >= 18.0.0
+- Node.js >= 20.0.0
 
 ## License
 

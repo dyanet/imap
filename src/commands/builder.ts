@@ -65,6 +65,19 @@ function formatDate(date: Date): string {
 }
 
 /**
+ * Builds an XOAUTH2 authentication string per RFC 7628 / Google XOAUTH2 spec
+ * Format: user={user}\x01auth=Bearer {token}\x01\x01
+ * 
+ * @param user - User email address
+ * @param accessToken - OAuth2 access token
+ * @returns Base64-encoded XOAUTH2 string
+ */
+export function buildXOAuth2String(user: string, accessToken: string): string {
+  const authString = `user=${user}\x01auth=Bearer ${accessToken}\x01\x01`;
+  return Buffer.from(authString, 'utf8').toString('base64');
+}
+
+/**
  * CommandBuilder provides static methods to construct IMAP commands
  */
 export class CommandBuilder {
@@ -77,6 +90,19 @@ export class CommandBuilder {
    */
   static login(user: string, password: string): string {
     return `LOGIN ${escapeString(user)} ${escapeString(password)}`;
+  }
+
+  /**
+   * Builds an AUTHENTICATE XOAUTH2 command
+   * Used for OAuth2 authentication with Gmail, Microsoft 365, etc.
+   * 
+   * @param user - User email address
+   * @param accessToken - OAuth2 access token
+   * @returns AUTHENTICATE command string with base64-encoded XOAUTH2 token
+   */
+  static authenticateXOAuth2(user: string, accessToken: string): string {
+    const xoauth2Token = buildXOAuth2String(user, accessToken);
+    return `AUTHENTICATE XOAUTH2 ${xoauth2Token}`;
   }
 
   /**

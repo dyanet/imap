@@ -95,6 +95,7 @@ export class ImapClient extends EventEmitter {
         port: imap.port ?? DEFAULT_PORT,
         user: imap.user,
         password: imap.password,
+        xoauth2: imap.xoauth2,
         tls: imap.tls ?? DEFAULT_TLS,
         tlsOptions: imap.tlsOptions,
         authTimeout: imap.authTimeout ?? DEFAULT_AUTH_TIMEOUT,
@@ -109,7 +110,7 @@ export class ImapClient extends EventEmitter {
   private getConnectionOptions(): ConnectionOptions {
     return {
       host: this.config.imap.host,
-      port: this.config.imap.port,
+      port: this.config.imap.port ?? DEFAULT_PORT,
       tls: this.config.imap.tls ?? DEFAULT_TLS,
       tlsOptions: this.config.imap.tlsOptions,
       connTimeout: this.config.imap.connTimeout ?? DEFAULT_CONN_TIMEOUT
@@ -213,17 +214,29 @@ export class ImapClient extends EventEmitter {
   }
 
   /**
-   * Authenticates with the server using LOGIN command
+   * Authenticates with the server using LOGIN or XOAUTH2 command
    */
   private async authenticate(): Promise<void> {
     if (!this.protocol) {
       throw new ImapError('No protocol handler', 'NO_PROTOCOL', 'protocol');
     }
 
-    const command = CommandBuilder.login(
-      this.config.imap.user,
-      this.config.imap.password
-    );
+    let command: string;
+
+    // Check if XOAUTH2 authentication is configured
+    if (this.config.imap.xoauth2) {
+      command = CommandBuilder.authenticateXOAuth2(
+        this.config.imap.xoauth2.user,
+        this.config.imap.xoauth2.accessToken
+      );
+    } else if (this.config.imap.password) {
+      command = CommandBuilder.login(
+        this.config.imap.user,
+        this.config.imap.password
+      );
+    } else {
+      throw new ImapError('No authentication credentials provided', 'NO_CREDENTIALS', 'protocol');
+    }
 
     await this.protocol.executeCommand(command, {
       timeout: this.config.imap.authTimeout
