@@ -8,8 +8,10 @@ import express, { Request, Response, NextFunction } from 'express';
 import session from 'express-session';
 import helmet from 'helmet';
 import crypto from 'crypto';
+import { ConfigManager, SecretsManagerLoader, EnvironmentLoader, EnvFileLoader } from '@dyanet/config-aws';
 import https from 'https';
-import { ImapClient, parseHeaders } from '@dyanet/imap';
+import { z } from 'zod';
+import { ImapClient, parseHeaders, type SearchCriteria } from '@dyanet/imap';
 
 // Extend session data
 declare module 'express-session' {
@@ -21,12 +23,42 @@ declare module 'express-session' {
   }
 }
 
+// Define your configuration schema
+const schema = z.object({
+  GOOGLE_CLIENT_ID: z.string(),
+  GOOGLE_CLIENT_SECRET: z.string(),
+  SESSION_SECRET: z.string(),
+  BASE_URL: z.string(),
+  PORT: z.coerce.number().default(3000),
+});
+
+// Create and load configuration
+/* Three from the environment */
+const CONFIG_SSM_PREFIX = process.env.CONFIG_SSM_PREFIX || '/mail-example';
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const AWS_REGION = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ca-central-1';
+const configManager = new ConfigManager({
+  loaders: [
+    new EnvFileLoader({ paths: ['.env', '.env.local'], override: true }),
+    new EnvironmentLoader(),
+    new SecretsManagerLoader({ secretName: '/mail-example/config' }),
+  ],
+  // Schema may have different Zod typings across package boundaries; cast to any
+  schema: schema as any,
+  // Disable automatic validation during load to avoid throwing here; we'll rely on schema in future
+  validateOnLoad: false,
+  precedence: 'aws-first', // AWS sources override local
+});
+// Load configuration before using it (top-level await is supported in ESM)
+await configManager.load();
+const config = configManager.getAll() as Record<string, any>;
+
 // Configuration
-const PORT = parseInt(process.env.PORT || '3000', 10);
-const CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
-const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
-const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
-const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
+const CLIENT_ID = config.GOOGLE_CLIENT_ID;
+const CLIENT_SECRET = config.GOOGLE_CLIENT_SECRET;
+const PORT = config.PORT;
+const SESSION_SECRET = config.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+const BASE_URL= config.BASE_URL || `http://localhost:${config.PORT}`;
 const CALLBACK_PATH = '/callback';
 const GMAIL_SCOPES = ['https://mail.google.com/'];
 
@@ -121,6 +153,10 @@ async function exchangeCodeForTokens(code: string): Promise<{
       let data = '';
       res.on('data', chunk => { data += chunk; });
       res.on('end', () => {
+        if (res.statusCode !== 200) {
+          reject(new Error(`Token exchange failed: HTTP ${res.statusCode} - ${data}`));
+          return;
+        }
         try {
           const response = JSON.parse(data);
           if (response.error) {
@@ -162,6 +198,10 @@ async function getUserEmail(accessToken: string): Promise<string> {
       let data = '';
       res.on('data', chunk => { data += chunk; });
       res.on('end', () => {
+        if (res.statusCode !== 200) {
+          reject(new Error(`HTTP ${res.statusCode}: ${data || 'Unauthorized'}`));
+          return;
+        }
         try {
           const response = JSON.parse(data);
           if (response.error) {
@@ -238,6 +278,24 @@ function requireAuth(req: Request, res: Response, next: NextFunction): void {
 }
 
 /**
+ * Create a connected IMAP client with the current user's OAuth token
+ */
+async function createImapClient(user: string, accessToken: string): Promise<ImapClient> {
+  return ImapClient.connect({
+    imap: {
+      host: 'imap.gmail.com',
+      port: 993,
+      user,
+      tls: true,
+      xoauth2: { user, accessToken },
+      tlsOptions: {
+        servername: 'imap.gmail.com',
+      },
+    },
+  });
+}
+
+/**
  * Fetch emails from Gmail
  */
 async function fetchEmails(user: string, accessToken: string, limit: number = 20): Promise<Array<{
@@ -254,11 +312,15 @@ async function fetchEmails(user: string, accessToken: string, limit: number = 20
       user,
       tls: true,
       xoauth2: { user, accessToken },
+      tlsOptions: {
+        servername: 'imap.gmail.com',
+      },
     },
   });
 
   try {
     await client.openBox('INBOX');
+    
     const uids = await client.search(['ALL']);
     const latestUids = uids.sort((a, b) => b - a).slice(0, limit);
 
@@ -322,12 +384,21 @@ const baseTemplate = (title: string, content: string, user?: string) => `
     .center { text-align: center; }
     .error { color: #dc3545; padding: 1rem; background: #f8d7da; border-radius: 4px; margin-bottom: 1rem; }
     .info { color: #0c5460; padding: 1rem; background: #d1ecf1; border-radius: 4px; margin-bottom: 1rem; }
+    .form-row { display: flex; gap: 0.75rem; margin-top: 0.75rem; flex-wrap: wrap; }
+    .form-row label { display: flex; flex-direction: column; font-size: 0.9rem; color: #333; flex: 1 1 180px; }
+    .form-row input, .form-row textarea { padding: 0.55rem 0.65rem; border: 1px solid #ddd; border-radius: 4px; margin-top: 0.35rem; font-size: 0.95rem; }
+    pre { background: #f8f9fa; border-radius: 6px; padding: 1rem; overflow-x: auto; margin-top: 0.75rem; border: 1px solid #eee; }
   </style>
 </head>
 <body>
   <div class="header">
     <h1>📧 Gmail Viewer</h1>
-    ${user ? `<div><span>${user}</span> | <a href="/logout">Logout</a></div>` : ''}
+    ${user ? `<div style="display: flex; gap: 0.75rem; align-items: center;">
+      <span>${user}</span>
+      <a href="/inbox">Inbox</a>
+      <a href="/diagnostics">Diagnostics</a>
+      <a href="/logout">Logout</a>
+    </div>` : ''}
   </div>
   <div class="container">${content}</div>
 </body>
@@ -431,7 +502,9 @@ app.get(CALLBACK_PATH, async (req, res) => {
 
 app.get('/inbox', requireAuth, async (req, res) => {
   try {
+    console.log('Fetching emails for:', req.session.user);
     const emails = await fetchEmails(req.session.user!, req.session.accessToken!);
+    console.log(`Fetched ${emails.length} emails`);
 
     const emailListHtml = emails.length > 0
       ? `<ul class="email-list">${emails.map(email => `
@@ -453,15 +526,18 @@ app.get('/inbox', requireAuth, async (req, res) => {
       </div>
     `, req.session.user));
   } catch (err) {
+    console.error('Error fetching emails:', err);
+    
     // Try to refresh token if authentication failed
     if (req.session.refreshToken && err instanceof Error && 
         (err.message.includes('AUTHENTICATIONFAILED') || err.message.includes('Invalid credentials'))) {
       try {
+        console.log('Attempting token refresh...');
         req.session.accessToken = await refreshAccessToken(req.session.refreshToken);
         res.redirect('/inbox');
         return;
-      } catch {
-        // Refresh failed, redirect to login
+      } catch (refreshErr) {
+        console.error('Token refresh failed:', refreshErr);
       }
     }
 
@@ -472,6 +548,23 @@ app.get('/inbox', requireAuth, async (req, res) => {
         <a href="/logout" class="btn btn-danger" style="margin-left: 0.5rem;">Logout</a>
       </div>
     `, req.session.user));
+  }
+});
+
+app.get('/diagnostics', requireAuth, (req, res) => {
+  res.send(baseTemplate('Diagnostics', renderDiagnosticsPage(), req.session.user));
+});
+
+app.post('/diagnostics/:action', requireAuth, async (req, res) => {
+  try {
+    const result = await handleDiagnosticsAction(req.params.action, req);
+    res.send(baseTemplate('Diagnostics', renderDiagnosticsPage(result), req.session.user));
+  } catch (err) {
+    res.send(baseTemplate('Diagnostics', renderDiagnosticsPage({
+      title: 'Unexpected error',
+      success: false,
+      details: err instanceof Error ? err.message : 'Unknown error',
+    }), req.session.user));
   }
 });
 
@@ -517,6 +610,344 @@ function formatDate(date: Date): string {
   }
   
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+type DiagnosticResult = {
+  title: string;
+  success: boolean;
+  details: any;
+};
+
+function renderDiagnosticsPage(result?: DiagnosticResult): string {
+  const resultBlock = result ? `
+    <div class="card">
+      <h2>${escapeHtml(result.title)}</h2>
+      <div class="${result.success ? 'info' : 'error'}">${result.success ? 'Success' : 'Failed'}</div>
+      ${typeof result.details === 'string'
+        ? `<pre>${escapeHtml(result.details)}</pre>`
+        : `<pre>${escapeHtml(JSON.stringify(result.details, null, 2))}</pre>`}
+    </div>
+  ` : '';
+
+  return `
+    ${resultBlock}
+    <div class="card">
+      <h2>Capabilities</h2>
+      <form method="post" action="/diagnostics/capabilities">
+        <button class="btn" type="submit">Refresh & List</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Mailboxes</h2>
+      <form method="post" action="/diagnostics/mailboxes">
+        <button class="btn" type="submit">List Mailboxes</button>
+      </form>
+      <form method="post" action="/diagnostics/add-box" class="form-row">
+        <label>Mailbox name<input name="mailboxName" placeholder="Test-Box" required></label>
+        <button class="btn" type="submit">Add Mailbox</button>
+      </form>
+      <form method="post" action="/diagnostics/rename-box" class="form-row">
+        <label>From<input name="fromName" placeholder="Old-Name" required></label>
+        <label>To<input name="toName" placeholder="New-Name" required></label>
+        <button class="btn" type="submit">Rename</button>
+      </form>
+      <form method="post" action="/diagnostics/delete-box" class="form-row">
+        <label>Mailbox name<input name="mailboxName" placeholder="Test-Box" required></label>
+        <button class="btn btn-danger" type="submit">Delete</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Messages & Flags</h2>
+      <form method="post" action="/diagnostics/open-box" class="form-row">
+        <label>Mailbox<input name="mailbox" value="INBOX" required></label>
+        <label>Read only?<input type="checkbox" name="readOnly" value="true"></label>
+        <button class="btn" type="submit">Open Box</button>
+      </form>
+
+      <form method="post" action="/diagnostics/search" class="form-row">
+        <label>Mailbox<input name="mailbox" value="INBOX" required></label>
+        <label>Criteria (one per line)<textarea name="criteria" rows="3" placeholder="ALL&#10;UNSEEN&#10;FROM someone@example.com"></textarea></label>
+        <label>Limit<input name="limit" type="number" min="1" max="50" value="10"></label>
+        <button class="btn" type="submit">Search (with headers)</button>
+      </form>
+
+      <form method="post" action="/diagnostics/fetch" class="form-row">
+        <label>Mailbox<input name="mailbox" value="INBOX" required></label>
+        <label>UIDs (comma/space separated)<input name="uids" placeholder="1,2,3" required></label>
+        <label>Bodies (comma separated)<input name="bodies" value="HEADER.FIELDS (SUBJECT FROM DATE)"></label>
+        <button class="btn" type="submit">Fetch Messages</button>
+      </form>
+
+      <form method="post" action="/diagnostics/add-flags" class="form-row">
+        <label>Mailbox<input name="mailbox" value="INBOX" required></label>
+        <label>UIDs<input name="uids" placeholder="1,2,3" required></label>
+        <label>Flags<input name="flags" value="\\Seen"></label>
+        <button class="btn" type="submit">Add Flags</button>
+      </form>
+
+      <form method="post" action="/diagnostics/remove-flags" class="form-row">
+        <label>Mailbox<input name="mailbox" value="INBOX" required></label>
+        <label>UIDs<input name="uids" placeholder="1,2,3" required></label>
+        <label>Flags<input name="flags" value="\\Seen"></label>
+        <button class="btn" type="submit">Remove Flags</button>
+      </form>
+
+      <form method="post" action="/diagnostics/copy" class="form-row">
+        <label>Source mailbox<input name="mailbox" value="INBOX" required></label>
+        <label>UIDs<input name="uids" placeholder="1,2,3" required></label>
+        <label>Destination mailbox<input name="destination" placeholder="Archive" required></label>
+        <button class="btn" type="submit">Copy</button>
+      </form>
+
+      <form method="post" action="/diagnostics/move" class="form-row">
+        <label>Source mailbox<input name="mailbox" value="INBOX" required></label>
+        <label>UIDs<input name="uids" placeholder="1,2,3" required></label>
+        <label>Destination mailbox<input name="destination" placeholder="Archive" required></label>
+        <button class="btn" type="submit">Move</button>
+      </form>
+
+      <form method="post" action="/diagnostics/expunge" class="form-row">
+        <label>Mailbox<input name="mailbox" value="INBOX" required></label>
+        <button class="btn btn-danger" type="submit">Expunge Deleted</button>
+      </form>
+    </div>
+  `;
+}
+
+async function handleDiagnosticsAction(action: string, req: Request): Promise<DiagnosticResult> {
+  const user = req.session.user!;
+  const accessToken = req.session.accessToken!;
+
+  switch (action) {
+    case 'capabilities':
+      return withClient(user, accessToken, async (client) => {
+        const capabilities = await client.refreshCapabilities();
+        return {
+          title: 'Capabilities',
+          success: true,
+          details: {
+            capabilities: Array.from(capabilities.values()),
+            hasCondstore: client.hasCondstore(),
+            hasQresync: client.hasQresync(),
+            hasIdle: client.hasCapability('IDLE'),
+          },
+        };
+      });
+    case 'mailboxes':
+      return withClient(user, accessToken, async (client) => {
+        const boxes = await client.getBoxes();
+        return { title: 'Mailboxes', success: true, details: boxes };
+      });
+    case 'add-box': {
+      const mailboxName = (req.body.mailboxName || '').trim();
+      if (!mailboxName) return { title: 'Add mailbox', success: false, details: 'Mailbox name is required' };
+      return withClient(user, accessToken, async (client) => {
+        await client.addBox(mailboxName);
+        return { title: 'Add mailbox', success: true, details: { mailboxName } };
+      });
+    }
+    case 'rename-box': {
+      const fromName = (req.body.fromName || '').trim();
+      const toName = (req.body.toName || '').trim();
+      if (!fromName || !toName) return { title: 'Rename mailbox', success: false, details: 'Both names are required' };
+      return withClient(user, accessToken, async (client) => {
+        await client.renameBox(fromName, toName);
+        return { title: 'Rename mailbox', success: true, details: { fromName, toName } };
+      });
+    }
+    case 'delete-box': {
+      const mailboxName = (req.body.mailboxName || '').trim();
+      if (!mailboxName) return { title: 'Delete mailbox', success: false, details: 'Mailbox name is required' };
+      return withClient(user, accessToken, async (client) => {
+        await client.delBox(mailboxName);
+        return { title: 'Delete mailbox', success: true, details: { mailboxName } };
+      });
+    }
+    case 'open-box': {
+      const mailbox = (req.body.mailbox || 'INBOX').trim();
+      const readOnly = req.body.readOnly === 'true' || req.body.readOnly === 'on';
+      return withClient(user, accessToken, async (client) => {
+        const box = await client.openBox(mailbox, readOnly);
+        return {
+          title: 'Open mailbox',
+          success: true,
+          details: {
+            mailbox,
+            readOnly,
+            messages: box.messages,
+            uidValidity: box.uidvalidity,
+            highestModseq: box.highestModseq,
+          },
+        };
+      });
+    }
+    case 'search': {
+      const mailbox = (req.body.mailbox || 'INBOX').trim();
+      const limit = Number(req.body.limit) || 10;
+      const criteriaInput = typeof req.body.criteria === 'string' ? req.body.criteria : '';
+      const criteria = parseSearchCriteria(criteriaInput);
+      return withClient(user, accessToken, async (client) => {
+        await client.openBox(mailbox);
+        const messages = await client.search(criteria, { bodies: ['HEADER.FIELDS (SUBJECT FROM DATE)'], markSeen: false });
+        const samples = messages.slice(0, limit).map(msg => {
+          // Find header part - it might be named 'HEADER' or 'HEADER.FIELDS (...)'
+          const headerPart = msg.parts?.find(p => 
+            p.which.toUpperCase().includes('HEADER') || 
+            p.which === 'HEADER.FIELDS (SUBJECT FROM DATE)'
+          );
+          const headers = headerPart 
+            ? parseHeaders(typeof headerPart.body === 'string' ? headerPart.body : headerPart.body.toString())
+            : new Map();
+          return {
+            uid: msg.uid,
+            flags: msg.attributes?.flags || [],
+            subject: headers.get('subject'),
+            from: headers.get('from'),
+            date: headers.get('date'),
+          };
+        });
+        return {
+          title: 'Search mailbox',
+          success: true,
+          details: { mailbox, criteria, returned: messages.length, samples },
+        };
+      });
+    }
+    case 'fetch': {
+      const mailbox = (req.body.mailbox || 'INBOX').trim();
+      const uids = parseUidList(req.body.uids);
+      const bodies = parseBodiesInput(req.body.bodies);
+      if (uids.length === 0) return { title: 'Fetch', success: false, details: 'Provide at least one UID' };
+      return withClient(user, accessToken, async (client) => {
+        await client.openBox(mailbox);
+        const fetched = await client.fetch(uids, { bodies, struct: true, envelope: true, markSeen: false });
+        const summary = fetched.map(msg => ({
+          uid: msg.uid,
+          flags: msg.attributes.flags,
+          bodies: msg.parts.map(p => p.which),
+        }));
+        return {
+          title: 'Fetch messages',
+          success: true,
+          details: { mailbox, uids, bodies, count: fetched.length, summary },
+        };
+      });
+    }
+    case 'add-flags': {
+      const mailbox = (req.body.mailbox || 'INBOX').trim();
+      const uids = parseUidList(req.body.uids);
+      const flags = parseFlags(req.body.flags);
+      if (!uids.length) return { title: 'Add flags', success: false, details: 'Provide UIDs' };
+      if (!flags.length) return { title: 'Add flags', success: false, details: 'Provide flags' };
+      return withClient(user, accessToken, async (client) => {
+        await client.openBox(mailbox);
+        await client.addFlags(uids, flags);
+        return { title: 'Add flags', success: true, details: { mailbox, uids, flags } };
+      });
+    }
+    case 'remove-flags': {
+      const mailbox = (req.body.mailbox || 'INBOX').trim();
+      const uids = parseUidList(req.body.uids);
+      const flags = parseFlags(req.body.flags);
+      if (!uids.length) return { title: 'Remove flags', success: false, details: 'Provide UIDs' };
+      if (!flags.length) return { title: 'Remove flags', success: false, details: 'Provide flags' };
+      return withClient(user, accessToken, async (client) => {
+        await client.openBox(mailbox);
+        await client.delFlags(uids, flags);
+        return { title: 'Remove flags', success: true, details: { mailbox, uids, flags } };
+      });
+    }
+    case 'copy': {
+      const mailbox = (req.body.mailbox || 'INBOX').trim();
+      const destination = (req.body.destination || '').trim();
+      const uids = parseUidList(req.body.uids);
+      if (!uids.length) return { title: 'Copy messages', success: false, details: 'Provide UIDs' };
+      if (!destination) return { title: 'Copy messages', success: false, details: 'Destination mailbox required' };
+      return withClient(user, accessToken, async (client) => {
+        await client.openBox(mailbox);
+        await client.copy(uids, destination);
+        return { title: 'Copy messages', success: true, details: { mailbox, destination, uids } };
+      });
+    }
+    case 'move': {
+      const mailbox = (req.body.mailbox || 'INBOX').trim();
+      const destination = (req.body.destination || '').trim();
+      const uids = parseUidList(req.body.uids);
+      if (!uids.length) return { title: 'Move messages', success: false, details: 'Provide UIDs' };
+      if (!destination) return { title: 'Move messages', success: false, details: 'Destination mailbox required' };
+      return withClient(user, accessToken, async (client) => {
+        await client.openBox(mailbox);
+        await client.move(uids, destination);
+        return { title: 'Move messages', success: true, details: { mailbox, destination, uids } };
+      });
+    }
+    case 'expunge': {
+      const mailbox = (req.body.mailbox || 'INBOX').trim();
+      return withClient(user, accessToken, async (client) => {
+        await client.openBox(mailbox);
+        await client.expunge();
+        return { title: 'Expunge', success: true, details: { mailbox } };
+      });
+    }
+    default:
+      return { title: 'Unknown action', success: false, details: action };
+  }
+}
+
+async function withClient(
+  user: string,
+  accessToken: string,
+  fn: (client: ImapClient) => Promise<DiagnosticResult>
+): Promise<DiagnosticResult> {
+  const client = await createImapClient(user, accessToken);
+  try {
+    return await fn(client);
+  } finally {
+    await client.end();
+  }
+}
+
+function parseUidList(value: unknown): number[] {
+  if (typeof value !== 'string') return [];
+  return value
+    .split(/[,\\s]+/)
+    .map(v => parseInt(v, 10))
+    .filter(n => !Number.isNaN(n));
+}
+
+function parseFlags(value: unknown): string[] {
+  if (typeof value !== 'string') return [];
+  return value
+    .split(/[,\\s]+/)
+    .map(v => v.trim())
+    .filter(Boolean);
+}
+
+function parseBodiesInput(value: unknown): string | string[] {
+  if (typeof value !== 'string' || !value.trim()) return ['HEADER'];
+  const parts = value.split(/[,\\n]+/).map(v => v.trim()).filter(Boolean);
+  return parts.length === 1 ? parts[0] : parts;
+}
+
+function parseSearchCriteria(input: string): SearchCriteria[] {
+  const lines = input
+    .split(/\n/)
+    .map(l => l.trim())
+    .filter(Boolean);
+  if (!lines.length) return ['ALL'];
+
+  return lines.map(line => {
+    const [head, ...rest] = line.split(/\s+/);
+    const remainder = rest.join(' ').trim();
+    if (!remainder) return head as SearchCriteria;
+    if (['SINCE', 'BEFORE', 'ON'].includes(head.toUpperCase())) {
+      const parsedDate = new Date(remainder);
+      return [head.toUpperCase(), parsedDate] as SearchCriteria;
+    }
+    return [head.toUpperCase(), remainder] as SearchCriteria;
+  });
 }
 
 // Start server
