@@ -20,7 +20,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@dyanet/config-aws": "1.0.3",
+    "@dyanet/config-aws": "^1.0.3",
     "@dyanet/imap": "^0.5.1",
     "express": "^4.21.0",
     "express-session": "^1.18.0",
