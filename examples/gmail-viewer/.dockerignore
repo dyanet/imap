@@ -10,6 +10,7 @@ yarn-error.log*
 coverage/
 
 # Build artifacts
+dist/
 *.tsbuildinfo
 
 # IDE and editor files

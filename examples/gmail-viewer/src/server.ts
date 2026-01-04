@@ -22,7 +22,20 @@ declare module 'express-session' {
     refreshToken?: string;
     tokenExpiry?: number;  // Unix timestamp when access token expires
     lastOAuthError?: string;  // Last OAuth error for debugging
+    sessionCreatedAt?: number;  // Unix timestamp when session was created
+    diagnosticsHistory?: DiagnosticsHistoryEntry[];  // Last 10 diagnostic operations
   }
+}
+
+// Diagnostics history entry type
+interface DiagnosticsHistoryEntry {
+  id: string;  // Unique ID for re-running
+  action: string;
+  title: string;
+  success: boolean;
+  timestamp: number;  // Unix timestamp
+  params: Record<string, any>;  // Parameters used for the operation
+  details: any;  // Result details (truncated for large results)
 }
 
 // Store active IDLE sessions (keyed by session ID)
@@ -33,6 +46,240 @@ const activeIdleSessions = new Map<string, {
   mailbox: string;
   notifications: IdleNotification[];
 }>();
+
+// ============================================================================
+// Error Handling Utilities
+// ============================================================================
+
+/**
+ * Error types for classification
+ */
+type ErrorType = 'auth' | 'network' | 'imap' | 'validation' | 'unknown';
+
+interface ClassifiedError {
+  type: ErrorType;
+  message: string;
+  originalError?: Error;
+  imapCode?: string;
+  userFriendlyMessage: string;
+  recoverable: boolean;
+}
+
+/**
+ * Log an error with timestamp to console
+ */
+function logError(context: string, error: unknown, additionalInfo?: Record<string, unknown>): void {
+  const timestamp = new Date().toISOString();
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const errorStack = error instanceof Error ? error.stack : undefined;
+  
+  console.error(`[${timestamp}] [ERROR] [${context}]`, {
+    message: errorMessage,
+    stack: errorStack,
+    ...additionalInfo,
+  });
+}
+
+/**
+ * Log an info message with timestamp
+ */
+function logInfo(context: string, message: string, additionalInfo?: Record<string, unknown>): void {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] [INFO] [${context}]`, message, additionalInfo || '');
+}
+
+/**
+ * Classify an error into a specific type for appropriate handling
+ */
+function classifyError(error: unknown): ClassifiedError {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const lowerMessage = errorMessage.toLowerCase();
+  
+  // Authentication errors
+  if (
+    lowerMessage.includes('authenticationfailed') ||
+    lowerMessage.includes('invalid credentials') ||
+    lowerMessage.includes('xoauth2') ||
+    lowerMessage.includes('invalid_grant') ||
+    lowerMessage.includes('token') && (lowerMessage.includes('expired') || lowerMessage.includes('invalid')) ||
+    lowerMessage.includes('unauthorized') ||
+    lowerMessage.includes('authentication required')
+  ) {
+    return {
+      type: 'auth',
+      message: errorMessage,
+      originalError: error instanceof Error ? error : undefined,
+      userFriendlyMessage: 'Your session has expired or your credentials are invalid. Please re-authenticate.',
+      recoverable: true,
+    };
+  }
+  
+  // Network errors
+  if (
+    lowerMessage.includes('econnrefused') ||
+    lowerMessage.includes('etimedout') ||
+    lowerMessage.includes('enotfound') ||
+    lowerMessage.includes('enetunreach') ||
+    lowerMessage.includes('econnreset') ||
+    lowerMessage.includes('epipe') ||
+    lowerMessage.includes('socket') ||
+    lowerMessage.includes('network') ||
+    lowerMessage.includes('connection') && (lowerMessage.includes('refused') || lowerMessage.includes('reset') || lowerMessage.includes('timeout'))
+  ) {
+    return {
+      type: 'network',
+      message: errorMessage,
+      originalError: error instanceof Error ? error : undefined,
+      userFriendlyMessage: 'Unable to connect to the mail server. Please check your internet connection and try again.',
+      recoverable: true,
+    };
+  }
+  
+  // IMAP-specific errors (extract IMAP response codes if present)
+  const imapCodeMatch = errorMessage.match(/\[([A-Z]+)\]/);
+  const imapCode = imapCodeMatch ? imapCodeMatch[1] : undefined;
+  
+  if (
+    lowerMessage.includes('no such mailbox') ||
+    lowerMessage.includes('mailbox does not exist') ||
+    lowerMessage.includes('nonexistent') ||
+    imapCode === 'NONEXISTENT'
+  ) {
+    return {
+      type: 'imap',
+      message: errorMessage,
+      originalError: error instanceof Error ? error : undefined,
+      imapCode,
+      userFriendlyMessage: 'The specified mailbox does not exist. Please check the mailbox name and try again.',
+      recoverable: false,
+    };
+  }
+  
+  if (
+    lowerMessage.includes('cannot') ||
+    lowerMessage.includes('permission') ||
+    lowerMessage.includes('not allowed') ||
+    imapCode === 'NOPERM'
+  ) {
+    return {
+      type: 'imap',
+      message: errorMessage,
+      originalError: error instanceof Error ? error : undefined,
+      imapCode,
+      userFriendlyMessage: 'You do not have permission to perform this operation.',
+      recoverable: false,
+    };
+  }
+  
+  if (imapCode === 'TRYCREATE') {
+    return {
+      type: 'imap',
+      message: errorMessage,
+      originalError: error instanceof Error ? error : undefined,
+      imapCode,
+      userFriendlyMessage: 'The destination mailbox does not exist. Please create it first.',
+      recoverable: false,
+    };
+  }
+  
+  // Generic IMAP error with code
+  if (imapCode) {
+    return {
+      type: 'imap',
+      message: errorMessage,
+      originalError: error instanceof Error ? error : undefined,
+      imapCode,
+      userFriendlyMessage: `IMAP server error [${imapCode}]: ${errorMessage}`,
+      recoverable: false,
+    };
+  }
+  
+  // Unknown error
+  return {
+    type: 'unknown',
+    message: errorMessage,
+    originalError: error instanceof Error ? error : undefined,
+    userFriendlyMessage: `An unexpected error occurred: ${errorMessage}`,
+    recoverable: false,
+  };
+}
+
+/**
+ * Format error for display in HTML
+ */
+function formatErrorForDisplay(classified: ClassifiedError): { title: string; description: string; showReauth: boolean } {
+  switch (classified.type) {
+    case 'auth':
+      return {
+        title: 'Authentication Failed',
+        description: classified.userFriendlyMessage,
+        showReauth: true,
+      };
+    case 'network':
+      return {
+        title: 'Connection Error',
+        description: classified.userFriendlyMessage,
+        showReauth: false,
+      };
+    case 'imap':
+      return {
+        title: 'Mail Server Error',
+        description: classified.userFriendlyMessage,
+        showReauth: false,
+      };
+    default:
+      return {
+        title: 'Error',
+        description: classified.userFriendlyMessage,
+        showReauth: false,
+      };
+  }
+}
+
+/**
+ * Render an authentication error page with countdown to auto-redirect
+ */
+function renderAuthErrorPage(errorMessage: string, countdownSeconds: number = 10): string {
+  return `
+    <div class="card center">
+      <h2>Authentication Required</h2>
+      <div class="error" style="margin-top: 1rem;">${escapeHtml(errorMessage)}</div>
+      <div class="countdown-text" style="margin-top: 1.5rem;">
+        Redirecting to login in <span id="countdown" class="countdown">${countdownSeconds}</span> seconds...
+      </div>
+      <div style="margin-top: 1.5rem;">
+        <a href="/auth" class="btn">Re-authenticate Now</a>
+        <button onclick="cancelCountdown()" class="btn btn-secondary" style="margin-left: 0.5rem;">Cancel</button>
+      </div>
+    </div>
+    <script>
+      let countdownValue = ${countdownSeconds};
+      let countdownInterval = null;
+      
+      function startCountdown() {
+        countdownInterval = setInterval(function() {
+          countdownValue--;
+          document.getElementById('countdown').textContent = countdownValue;
+          if (countdownValue <= 0) {
+            clearInterval(countdownInterval);
+            window.location.href = '/auth';
+          }
+        }, 1000);
+      }
+      
+      function cancelCountdown() {
+        if (countdownInterval) {
+          clearInterval(countdownInterval);
+          countdownInterval = null;
+        }
+        document.querySelector('.countdown-text').innerHTML = 'Auto-redirect cancelled. <a href="/auth">Click here to re-authenticate</a>';
+      }
+      
+      // Start countdown when page loads
+      startCountdown();
+    </script>
+  `;
+}
 
 // Define your configuration schema
 const schema = z.object({
@@ -94,6 +341,14 @@ app.use(helmet({
 }));
 
 // Session configuration
+// Security: Using secure, httpOnly cookies with sameSite protection
+// - secure: Only send cookie over HTTPS in production
+// - httpOnly: Prevent JavaScript access to cookie (XSS protection)
+// - sameSite: Prevent CSRF attacks
+// - maxAge: Session expires after 24 hours
+const SESSION_MAX_AGE = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+const SESSION_WARNING_THRESHOLD = 30 * 60 * 1000; // 30 minutes before expiry
+
 app.use(session({
   secret: SESSION_SECRET,
   resave: false,
@@ -101,10 +356,30 @@ app.use(session({
   cookie: {
     secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
-    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    maxAge: SESSION_MAX_AGE,
     sameSite: 'lax',
   },
 }));
+
+// Session expiry tracking middleware
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (req.session && req.session.accessToken) {
+    // Track session creation time if not set
+    if (!req.session.sessionCreatedAt) {
+      req.session.sessionCreatedAt = Date.now();
+    }
+    
+    // Check if session is about to expire
+    const sessionAge = Date.now() - req.session.sessionCreatedAt;
+    const timeRemaining = SESSION_MAX_AGE - sessionAge;
+    
+    // Store session expiry info for UI display
+    res.locals.sessionExpiresAt = req.session.sessionCreatedAt + SESSION_MAX_AGE;
+    res.locals.sessionWarning = timeRemaining <= SESSION_WARNING_THRESHOLD && timeRemaining > 0;
+    res.locals.sessionTimeRemaining = timeRemaining;
+  }
+  next();
+});
 
 // Parse JSON bodies
 app.use(express.json());
@@ -149,11 +424,11 @@ async function exchangeCodeForTokens(code: string): Promise<{
     grant_type: 'authorization_code',
   });
 
-  console.log('[OAuth2] Exchanging authorization code for tokens...');
-  console.log('[OAuth2] Redirect URI:', `${BASE_URL}${CALLBACK_PATH}`);
-  console.log('[OAuth2] Client ID:', CLIENT_ID ? `${CLIENT_ID.substring(0, 20)}...` : 'NOT SET');
-  console.log('[OAuth2] Client Secret:', CLIENT_SECRET ? `${CLIENT_SECRET.substring(0, 8)}... (length: ${CLIENT_SECRET.length})` : 'NOT SET');
-  console.log('[OAuth2] Client Secret starts with GOCSPX-:', CLIENT_SECRET?.startsWith('GOCSPX-'));
+  logInfo('OAuth2', 'Exchanging authorization code for tokens', {
+    redirectUri: `${BASE_URL}${CALLBACK_PATH}`,
+    clientIdSet: !!CLIENT_ID,
+    clientSecretSet: !!CLIENT_SECRET,
+  });
 
   return new Promise((resolve, reject) => {
     const postData = params.toString();
@@ -172,11 +447,11 @@ async function exchangeCodeForTokens(code: string): Promise<{
       let data = '';
       res.on('data', chunk => { data += chunk; });
       res.on('end', () => {
-        console.log('[OAuth2] Token exchange response status:', res.statusCode);
+        logInfo('OAuth2', `Token exchange response status: ${res.statusCode}`);
         
         if (res.statusCode !== 200) {
           const errorMsg = `Token exchange failed: HTTP ${res.statusCode} - ${data}`;
-          console.error('[OAuth2] Error:', errorMsg);
+          logError('OAuth2', new Error(errorMsg), { statusCode: res.statusCode });
           reject(new Error(errorMsg));
           return;
         }
@@ -184,25 +459,25 @@ async function exchangeCodeForTokens(code: string): Promise<{
           const response = JSON.parse(data);
           if (response.error) {
             const errorMsg = response.error_description || response.error;
-            console.error('[OAuth2] Token error:', errorMsg);
+            logError('OAuth2', new Error(errorMsg), { errorCode: response.error });
             reject(new Error(errorMsg));
             return;
           }
-          console.log('[OAuth2] Token exchange successful, expires_in:', response.expires_in);
+          logInfo('OAuth2', 'Token exchange successful', { expiresIn: response.expires_in });
           resolve({
             accessToken: response.access_token,
             refreshToken: response.refresh_token,
             expiresIn: response.expires_in,
           });
         } catch (err) {
-          console.error('[OAuth2] Failed to parse token response:', err);
+          logError('OAuth2', err, { context: 'Failed to parse token response' });
           reject(new Error('Failed to parse token response'));
         }
       });
     });
 
     req.on('error', err => {
-      console.error('[OAuth2] Network error during token exchange:', err);
+      logError('OAuth2', err, { context: 'Network error during token exchange' });
       reject(err);
     });
     req.write(postData);
@@ -265,7 +540,7 @@ async function refreshAccessToken(refreshToken: string, retryCount = 0): Promise
     grant_type: 'refresh_token',
   });
 
-  console.log(`[OAuth2] Refreshing access token (attempt ${retryCount + 1}/${MAX_RETRIES + 1})...`);
+  logInfo('OAuth2', `Refreshing access token (attempt ${retryCount + 1}/${MAX_RETRIES + 1})`);
 
   return new Promise((resolve, reject) => {
     const postData = params.toString();
@@ -283,17 +558,17 @@ async function refreshAccessToken(refreshToken: string, retryCount = 0): Promise
       let data = '';
       res.on('data', chunk => { data += chunk; });
       res.on('end', () => {
-        console.log('[OAuth2] Token refresh response status:', res.statusCode);
+        logInfo('OAuth2', `Token refresh response status: ${res.statusCode}`);
         
         // Check for HTTP errors
         if (res.statusCode !== 200) {
           const errorMsg = `Token refresh failed: HTTP ${res.statusCode} - ${data}`;
-          console.error('[OAuth2] Error:', errorMsg);
+          logError('OAuth2', new Error(errorMsg), { statusCode: res.statusCode, attempt: retryCount + 1 });
           
           // Retry on 5xx errors or network issues
           if (res.statusCode && res.statusCode >= 500 && retryCount < MAX_RETRIES) {
             const delay = BASE_DELAY * Math.pow(2, retryCount);
-            console.log(`[OAuth2] Retrying in ${delay}ms...`);
+            logInfo('OAuth2', `Retrying in ${delay}ms...`);
             setTimeout(() => {
               refreshAccessToken(refreshToken, retryCount + 1)
                 .then(resolve)
@@ -310,29 +585,29 @@ async function refreshAccessToken(refreshToken: string, retryCount = 0): Promise
           const response = JSON.parse(data);
           if (response.error) {
             const errorMsg = response.error_description || response.error;
-            console.error('[OAuth2] Token refresh error:', errorMsg);
+            logError('OAuth2', new Error(errorMsg), { errorCode: response.error });
             reject(new Error(errorMsg));
             return;
           }
-          console.log('[OAuth2] Token refresh successful, expires_in:', response.expires_in);
+          logInfo('OAuth2', 'Token refresh successful', { expiresIn: response.expires_in });
           resolve({
             accessToken: response.access_token,
             expiresIn: response.expires_in,
           });
         } catch (err) {
-          console.error('[OAuth2] Failed to parse refresh response:', err);
+          logError('OAuth2', err, { context: 'Failed to parse refresh response' });
           reject(new Error('Failed to refresh token'));
         }
       });
     });
 
     req.on('error', err => {
-      console.error('[OAuth2] Network error during token refresh:', err);
+      logError('OAuth2', err, { context: 'Network error during token refresh', attempt: retryCount + 1 });
       
       // Retry on network errors
       if (retryCount < MAX_RETRIES) {
         const delay = BASE_DELAY * Math.pow(2, retryCount);
-        console.log(`[OAuth2] Retrying in ${delay}ms...`);
+        logInfo('OAuth2', `Retrying in ${delay}ms...`);
         setTimeout(() => {
           refreshAccessToken(refreshToken, retryCount + 1)
             .then(resolve)
@@ -357,6 +632,23 @@ function requireAuth(req: Request, res: Response, next: NextFunction): void {
     return;
   }
   next();
+}
+
+/**
+ * Get session info for template rendering
+ */
+function getSessionInfo(req: Request): { expiresAt?: number; warning?: boolean } | undefined {
+  if (!req.session.accessToken || !req.session.sessionCreatedAt) {
+    return undefined;
+  }
+  
+  const sessionExpiresAt = req.session.sessionCreatedAt + SESSION_MAX_AGE;
+  const timeRemaining = sessionExpiresAt - Date.now();
+  
+  return {
+    expiresAt: sessionExpiresAt,
+    warning: timeRemaining <= SESSION_WARNING_THRESHOLD && timeRemaining > 0,
+  };
 }
 
 /**
@@ -393,30 +685,30 @@ async function fetchEmails(user: string, accessToken: string, limit: number = 20
   date: Date | null;
   flags: string[];
 }>> {
-  console.log('[IMAP] Creating client for:', user);
+  logInfo('IMAP', `Creating client for: ${user}`);
   const client = await createImapClient(user, accessToken);
-  console.log('[IMAP] Client connected successfully');
+  logInfo('IMAP', 'Client connected successfully');
 
   try {
-    console.log('[IMAP] Opening INBOX...');
+    logInfo('IMAP', 'Opening INBOX...');
     await client.openBox('INBOX');
-    console.log('[IMAP] INBOX opened');
+    logInfo('IMAP', 'INBOX opened');
     
     const uids = await client.search(['ALL']);
-    console.log(`[IMAP] Found ${uids.length} messages`);
+    logInfo('IMAP', `Found ${uids.length} messages`);
     
     const latestUids = uids.sort((a, b) => b - a).slice(0, limit);
 
     if (latestUids.length === 0) {
-      console.log('[IMAP] No messages to fetch');
+      logInfo('IMAP', 'No messages to fetch');
       return [];
     }
 
-    console.log(`[IMAP] Fetching ${latestUids.length} messages...`);
+    logInfo('IMAP', `Fetching ${latestUids.length} messages...`);
     const messages = await client.fetch(latestUids, {
       bodies: ['HEADER.FIELDS (FROM SUBJECT DATE)'],
     });
-    console.log(`[IMAP] Fetched ${messages.length} messages`);
+    logInfo('IMAP', `Fetched ${messages.length} messages`);
 
     return messages.map(msg => {
       const headerPart = msg.parts.find(p => p.which.toUpperCase().includes('HEADER'));
@@ -463,14 +755,18 @@ async function fetchEmails(user: string, accessToken: string, limit: number = 20
       return b.date.getTime() - a.date.getTime();
     });
   } finally {
-    console.log('[IMAP] Closing connection...');
+    logInfo('IMAP', 'Closing connection...');
     await client.end();
-    console.log('[IMAP] Connection closed');
+    logInfo('IMAP', 'Connection closed');
   }
 }
 
 // HTML Templates
-const baseTemplate = (title: string, content: string, user?: string) => `
+const baseTemplate = (title: string, content: string, user?: string, sessionInfo?: { expiresAt?: number; warning?: boolean }) => {
+  const sessionExpiresAt = sessionInfo?.expiresAt;
+  const showWarning = sessionInfo?.warning;
+  
+  return `
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -483,12 +779,23 @@ const baseTemplate = (title: string, content: string, user?: string) => `
     .header { background: #1a73e8; color: white; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }
     .header h1 { font-size: 1.5rem; }
     .header a { color: white; text-decoration: none; }
+    .header-right { display: flex; gap: 0.75rem; align-items: center; }
+    .user-info { display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0.75rem; background: rgba(255,255,255,0.1); border-radius: 4px; }
+    .user-email { font-size: 0.9rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .session-indicator { display: flex; align-items: center; gap: 0.25rem; font-size: 0.75rem; opacity: 0.9; }
+    .session-indicator.warning { color: #ffc107; }
+    .session-timer { font-family: monospace; }
+    .refresh-btn { background: rgba(255,255,255,0.2); border: none; color: white; padding: 0.25rem 0.5rem; border-radius: 3px; cursor: pointer; font-size: 0.75rem; }
+    .refresh-btn:hover { background: rgba(255,255,255,0.3); }
     .container { max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
     .card { background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 2rem; margin-bottom: 1rem; }
     .btn { display: inline-block; padding: 0.75rem 1.5rem; background: #1a73e8; color: white; text-decoration: none; border-radius: 4px; border: none; cursor: pointer; font-size: 1rem; }
     .btn:hover { background: #1557b0; }
+    .btn:disabled { background: #ccc; cursor: not-allowed; }
     .btn-danger { background: #dc3545; }
     .btn-danger:hover { background: #c82333; }
+    .btn-secondary { background: #6c757d; }
+    .btn-secondary:hover { background: #5a6268; }
     .email-list { list-style: none; }
     .email-item { padding: 1rem; border-bottom: 1px solid #eee; display: flex; gap: 1rem; }
     .email-item:last-child { border-bottom: none; }
@@ -500,26 +807,129 @@ const baseTemplate = (title: string, content: string, user?: string) => `
     .center { text-align: center; }
     .error { color: #dc3545; padding: 1rem; background: #f8d7da; border-radius: 4px; margin-bottom: 1rem; }
     .info { color: #0c5460; padding: 1rem; background: #d1ecf1; border-radius: 4px; margin-bottom: 1rem; }
+    .success { color: #155724; padding: 1rem; background: #d4edda; border-radius: 4px; margin-bottom: 1rem; }
+    .warning { color: #856404; padding: 1rem; background: #fff3cd; border-radius: 4px; margin-bottom: 1rem; }
     .form-row { display: flex; gap: 0.75rem; margin-top: 0.75rem; flex-wrap: wrap; }
     .form-row label { display: flex; flex-direction: column; font-size: 0.9rem; color: #333; flex: 1 1 180px; }
     .form-row input, .form-row textarea { padding: 0.55rem 0.65rem; border: 1px solid #ddd; border-radius: 4px; margin-top: 0.35rem; font-size: 0.95rem; }
     pre { background: #f8f9fa; border-radius: 6px; padding: 1rem; overflow-x: auto; margin-top: 0.75rem; border: 1px solid #eee; }
+    pre.json-highlight { font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace; font-size: 0.85rem; line-height: 1.5; }
+    .json-string { color: #22863a; }
+    .json-number { color: #005cc5; }
+    .json-boolean { color: #d73a49; }
+    .json-null { color: #6f42c1; }
+    .countdown { font-size: 1.5rem; font-weight: bold; color: #1a73e8; margin: 1rem 0; }
+    .countdown-text { color: #666; font-size: 0.9rem; }
+    .loading-spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid #f3f3f3; border-top: 2px solid #1a73e8; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px; vertical-align: middle; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    .toast { position: fixed; bottom: 20px; right: 20px; padding: 1rem 1.5rem; border-radius: 4px; color: white; font-weight: 500; z-index: 1000; animation: slideIn 0.3s ease-out; }
+    .toast-success { background: #28a745; }
+    .toast-error { background: #dc3545; }
+    .toast-info { background: #17a2b8; }
+    @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
+    .session-warning-banner { background: #fff3cd; color: #856404; padding: 0.75rem 1rem; text-align: center; font-size: 0.9rem; border-bottom: 1px solid #ffc107; }
+    .session-warning-banner button { margin-left: 1rem; }
   </style>
 </head>
 <body>
+  ${showWarning ? `
+  <div class="session-warning-banner" id="session-warning-banner">
+    ⚠️ Your session is expiring soon. 
+    <button class="refresh-btn" onclick="refreshSession()" style="padding: 0.35rem 0.75rem; font-size: 0.85rem;">Refresh Session</button>
+  </div>
+  ` : ''}
   <div class="header">
     <h1>📧 Gmail Viewer</h1>
-    ${user ? `<div style="display: flex; gap: 0.75rem; align-items: center;">
-      <span>${user}</span>
+    ${user ? `<div class="header-right">
+      <div class="user-info">
+        <span class="user-email" title="${escapeHtml(user)}">👤 ${escapeHtml(user)}</span>
+        ${sessionExpiresAt ? `
+        <div class="session-indicator ${showWarning ? 'warning' : ''}" id="session-indicator">
+          <span>⏱️</span>
+          <span class="session-timer" id="session-timer"></span>
+          <button class="refresh-btn" onclick="refreshSession()" title="Refresh session">↻</button>
+        </div>
+        ` : ''}
+      </div>
       <a href="/inbox">Inbox</a>
       <a href="/diagnostics">Diagnostics</a>
       <a href="/logout">Logout</a>
     </div>` : ''}
   </div>
   <div class="container">${content}</div>
+  ${user && sessionExpiresAt ? `
+  <script>
+    // Session management
+    const sessionExpiresAt = ${sessionExpiresAt};
+    const warningThreshold = ${SESSION_WARNING_THRESHOLD};
+    
+    function updateSessionTimer() {
+      const now = Date.now();
+      const remaining = sessionExpiresAt - now;
+      const timerEl = document.getElementById('session-timer');
+      const indicatorEl = document.getElementById('session-indicator');
+      const bannerEl = document.getElementById('session-warning-banner');
+      
+      if (remaining <= 0) {
+        // Session expired - redirect to login
+        window.location.href = '/login?expired=1';
+        return;
+      }
+      
+      // Format remaining time
+      const minutes = Math.floor(remaining / 60000);
+      const seconds = Math.floor((remaining % 60000) / 1000);
+      const timeStr = minutes > 0 ? minutes + 'm ' + seconds + 's' : seconds + 's';
+      
+      if (timerEl) {
+        timerEl.textContent = timeStr;
+      }
+      
+      // Show warning if expiring soon
+      if (remaining <= warningThreshold) {
+        if (indicatorEl) indicatorEl.classList.add('warning');
+        if (bannerEl) bannerEl.style.display = 'block';
+      }
+    }
+    
+    function refreshSession() {
+      fetch('/session/refresh', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+          if (data.success) {
+            showToast('Session refreshed successfully', 'success');
+            // Reload page to get new session expiry
+            setTimeout(() => window.location.reload(), 500);
+          } else {
+            showToast('Failed to refresh session: ' + data.message, 'error');
+          }
+        })
+        .catch(err => {
+          showToast('Failed to refresh session', 'error');
+        });
+    }
+    
+    function showToast(message, type) {
+      const toast = document.createElement('div');
+      toast.className = 'toast toast-' + (type || 'info');
+      toast.textContent = message;
+      document.body.appendChild(toast);
+      setTimeout(() => {
+        toast.style.animation = 'fadeOut 0.3s ease-out forwards';
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    }
+    
+    // Update timer every second
+    updateSessionTimer();
+    setInterval(updateSessionTimer, 1000);
+  </script>
+  ` : ''}
 </body>
 </html>
 `;
+};
 
 // Routes
 app.get('/', (req, res) => {
@@ -546,9 +956,13 @@ app.get('/login', (req, res) => {
     return;
   }
 
+  // Check if redirected due to session expiry
+  const expired = req.query.expired === '1';
+
   res.send(baseTemplate('Login', `
     <div class="card center">
       <h2>Welcome to Gmail Viewer</h2>
+      ${expired ? '<div class="warning" style="margin: 1rem 0;">Your session has expired. Please sign in again.</div>' : ''}
       <p style="margin: 1.5rem 0; color: #666;">Sign in with your Google account to view your emails.</p>
       <a href="/auth" class="btn">Sign in with Google</a>
     </div>
@@ -565,6 +979,7 @@ app.get(CALLBACK_PATH, async (req, res) => {
   const { code, state, error } = req.query;
 
   if (error) {
+    logError('OAuth2', new Error(`Authorization failed: ${error}`), { error });
     res.send(baseTemplate('Error', `
       <div class="card">
         <div class="error">Authorization failed: ${error}</div>
@@ -576,6 +991,10 @@ app.get(CALLBACK_PATH, async (req, res) => {
 
   // Verify state to prevent CSRF
   if (!state || state !== req.session.oauthState) {
+    logError('OAuth2', new Error('Invalid state parameter - possible CSRF attack'), { 
+      receivedState: state, 
+      expectedState: req.session.oauthState ? '(set)' : '(not set)' 
+    });
     res.status(403).send(baseTemplate('Error', `
       <div class="card">
         <div class="error">Invalid state parameter. Possible CSRF attack.</div>
@@ -588,6 +1007,7 @@ app.get(CALLBACK_PATH, async (req, res) => {
   delete req.session.oauthState;
 
   if (!code || typeof code !== 'string') {
+    logError('OAuth2', new Error('No authorization code received'));
     res.send(baseTemplate('Error', `
       <div class="card">
         <div class="error">No authorization code received.</div>
@@ -610,15 +1030,16 @@ app.get(CALLBACK_PATH, async (req, res) => {
     }
     delete req.session.lastOAuthError;
 
-    console.log('[OAuth2] Authentication successful for:', email);
+    logInfo('OAuth2', `Authentication successful for: ${email}`);
     res.redirect('/inbox');
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-    req.session.lastOAuthError = errorMsg;
-    console.error('[OAuth2] Authentication failed:', errorMsg);
+    logError('OAuth2', err, { context: 'Authentication failed' });
+    const classified = classifyError(err);
+    req.session.lastOAuthError = classified.message;
+    
     res.send(baseTemplate('Error', `
       <div class="card">
-        <div class="error">Failed to authenticate: ${escapeHtml(errorMsg)}</div>
+        <div class="error">Failed to authenticate: ${escapeHtml(classified.userFriendlyMessage)}</div>
         <a href="/login" class="btn">Try Again</a>
       </div>
     `));
@@ -627,9 +1048,9 @@ app.get(CALLBACK_PATH, async (req, res) => {
 
 app.get('/inbox', requireAuth, async (req, res) => {
   try {
-    console.log('[Inbox] Fetching emails for:', req.session.user);
+    logInfo('Inbox', `Fetching emails for: ${req.session.user}`);
     const emails = await fetchEmails(req.session.user!, req.session.accessToken!);
-    console.log(`[Inbox] Fetched ${emails.length} emails`);
+    logInfo('Inbox', `Fetched ${emails.length} emails`);
 
     const emailListHtml = emails.length > 0
       ? `<ul class="email-list">${emails.map(email => `
@@ -649,19 +1070,17 @@ app.get('/inbox', requireAuth, async (req, res) => {
         </div>
         ${emailListHtml}
       </div>
-    `, req.session.user));
+    `, req.session.user, getSessionInfo(req)));
   } catch (err) {
-    console.error('[Inbox] Error fetching emails:', err);
-    const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-    const isAuthError = err instanceof Error && 
-      (err.message.includes('AUTHENTICATIONFAILED') || 
-       err.message.includes('Invalid credentials') ||
-       err.message.includes('XOAUTH2'));
+    logError('Inbox', err, { user: req.session.user });
+    
+    // Classify the error
+    const classified = classifyError(err);
     
     // Try to refresh token if authentication failed
-    if (req.session.refreshToken && isAuthError) {
+    if (req.session.refreshToken && classified.type === 'auth') {
       try {
-        console.log('[Inbox] Attempting token refresh...');
+        logInfo('Inbox', 'Attempting token refresh...');
         const refreshResult = await refreshAccessToken(req.session.refreshToken);
         req.session.accessToken = refreshResult.accessToken;
         // Update token expiry
@@ -669,51 +1088,60 @@ app.get('/inbox', requireAuth, async (req, res) => {
           req.session.tokenExpiry = Date.now() + (refreshResult.expiresIn * 1000);
         }
         delete req.session.lastOAuthError;
-        console.log('[Inbox] Token refresh successful, redirecting...');
+        logInfo('Inbox', 'Token refresh successful, redirecting...');
         res.redirect('/inbox');
         return;
       } catch (refreshErr) {
-        const refreshErrorMsg = refreshErr instanceof Error ? refreshErr.message : 'Unknown error';
-        console.error('[Inbox] Token refresh failed:', refreshErrorMsg);
-        req.session.lastOAuthError = refreshErrorMsg;
+        logError('Inbox', refreshErr, { context: 'Token refresh failed - persistent auth failure' });
+        req.session.lastOAuthError = refreshErr instanceof Error ? refreshErr.message : 'Unknown error';
+        
+        // Clear session on persistent auth failure and show countdown page
+        const savedUser = req.session.user;
+        req.session.accessToken = undefined;
+        req.session.refreshToken = undefined;
+        req.session.tokenExpiry = undefined;
+        
+        res.send(baseTemplate('Authentication Required', renderAuthErrorPage(
+          'Your session has expired and could not be refreshed. Please sign in again.',
+          10
+        ), savedUser));
+        return;
       }
     }
 
-    // Determine error type for better user feedback
-    const isNetworkError = err instanceof Error && 
-      (err.message.includes('ECONNREFUSED') || 
-       err.message.includes('ETIMEDOUT') ||
-       err.message.includes('ENOTFOUND') ||
-       err.message.includes('network'));
-    
-    const errorTitle = isAuthError 
-      ? 'Authentication Failed' 
-      : isNetworkError 
-        ? 'Connection Error' 
-        : 'Error';
-    
-    const errorDescription = isAuthError
-      ? 'Your session has expired or is invalid. Please re-authenticate.'
-      : isNetworkError
-        ? 'Unable to connect to Gmail. Please check your internet connection.'
-        : `Failed to fetch emails: ${escapeHtml(errorMsg)}`;
+    // For auth errors without refresh token, show countdown page
+    if (classified.type === 'auth') {
+      const savedUser = req.session.user;
+      req.session.accessToken = undefined;
+      req.session.refreshToken = undefined;
+      req.session.tokenExpiry = undefined;
+      
+      res.send(baseTemplate('Authentication Required', renderAuthErrorPage(
+        classified.userFriendlyMessage,
+        10
+      ), savedUser));
+      return;
+    }
+
+    // Format error for display (non-auth errors)
+    const errorDisplay = formatErrorForDisplay(classified);
 
     res.send(baseTemplate('Error', `
       <div class="card">
-        <h2>${errorTitle}</h2>
-        <div class="error" style="margin-top: 1rem;">${errorDescription}</div>
+        <h2>${errorDisplay.title}</h2>
+        <div class="error" style="margin-top: 1rem;">${escapeHtml(errorDisplay.description)}</div>
+        ${classified.imapCode ? `<p style="margin-top: 0.5rem; color: #666; font-size: 0.9rem;">Error code: ${escapeHtml(classified.imapCode)}</p>` : ''}
         <div style="margin-top: 1.5rem;">
           <a href="/inbox" class="btn">Retry</a>
-          ${isAuthError ? `<a href="/auth" class="btn" style="margin-left: 0.5rem;">Re-authenticate</a>` : ''}
           <a href="/logout" class="btn btn-danger" style="margin-left: 0.5rem;">Logout</a>
         </div>
       </div>
-    `, req.session.user));
+    `, req.session.user, getSessionInfo(req)));
   }
 });
 
 app.get('/diagnostics', requireAuth, (req, res) => {
-  res.send(baseTemplate('Diagnostics', renderDiagnosticsPage(), req.session.user));
+  res.send(baseTemplate('Diagnostics', renderDiagnosticsPage(undefined, req.session.diagnosticsHistory), req.session.user, getSessionInfo(req)));
 });
 
 // JSON endpoint for mailbox list (used by dropdown)
@@ -762,15 +1190,48 @@ app.get('/diagnostics/mailboxes-json', requireAuth, async (req, res) => {
 });
 
 app.post('/diagnostics/:action', requireAuth, async (req, res) => {
+  const action = req.params.action;
+  const params = { ...req.body };  // Copy params for history
+  
   try {
-    const result = await handleDiagnosticsAction(req.params.action, req);
-    res.send(baseTemplate('Diagnostics', renderDiagnosticsPage(result), req.session.user));
+    const result = await handleDiagnosticsAction(action, req);
+    
+    // Add to history
+    addToHistory(req, action, result, params);
+    
+    res.send(baseTemplate('Diagnostics', renderDiagnosticsPage(result, req.session.diagnosticsHistory), req.session.user, getSessionInfo(req)));
   } catch (err) {
-    res.send(baseTemplate('Diagnostics', renderDiagnosticsPage({
-      title: 'Unexpected error',
+    logError('Diagnostics', err, { action: action, user: req.session.user });
+    const classified = classifyError(err);
+    
+    // For auth errors, show the countdown page
+    if (classified.type === 'auth') {
+      const savedUser = req.session.user;
+      req.session.accessToken = undefined;
+      req.session.refreshToken = undefined;
+      req.session.tokenExpiry = undefined;
+      
+      res.send(baseTemplate('Authentication Required', renderAuthErrorPage(
+        classified.userFriendlyMessage,
+        10
+      ), savedUser));
+      return;
+    }
+    
+    const errorResult = {
+      title: `Error: ${action}`,
       success: false,
-      details: err instanceof Error ? err.message : 'Unknown error',
-    }), req.session.user));
+      details: {
+        errorType: classified.type,
+        message: classified.userFriendlyMessage,
+        ...(classified.imapCode && { imapCode: classified.imapCode }),
+      },
+    };
+    
+    // Add error to history too
+    addToHistory(req, action, errorResult, params);
+    
+    res.send(baseTemplate('Diagnostics', renderDiagnosticsPage(errorResult, req.session.diagnosticsHistory), req.session.user, getSessionInfo(req)));
   }
 });
 
@@ -993,12 +1454,97 @@ app.get('/debug/oauth', (req, res) => {
         <a href="/debug/oauth" class="btn" style="margin-left: 0.5rem;">Refresh</a>
       </div>
     </div>
-  `, req.session.user));
+  `, req.session.user, getSessionInfo(req)));
 });
 
 app.get('/logout', (req, res) => {
-  req.session.destroy(() => {
+  // Clear all sensitive session data before destroying
+  if (req.session) {
+    // Explicitly clear sensitive tokens
+    req.session.accessToken = undefined;
+    req.session.refreshToken = undefined;
+    req.session.tokenExpiry = undefined;
+    req.session.user = undefined;
+    req.session.oauthState = undefined;
+    req.session.lastOAuthError = undefined;
+    req.session.sessionCreatedAt = undefined;
+  }
+  
+  // Destroy the session completely
+  req.session.destroy((err) => {
+    if (err) {
+      logError('Logout', err, { context: 'Failed to destroy session' });
+    }
+    // Clear the session cookie
+    res.clearCookie('connect.sid', {
+      path: '/',
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+    });
     res.redirect('/login');
+  });
+});
+
+// Session refresh endpoint - extends session and refreshes OAuth token if needed
+app.post('/session/refresh', requireAuth, async (req, res) => {
+  try {
+    // Reset session creation time to extend the session
+    req.session.sessionCreatedAt = Date.now();
+    
+    // If we have a refresh token and the access token is close to expiry, refresh it
+    if (req.session.refreshToken && req.session.tokenExpiry) {
+      const timeUntilExpiry = req.session.tokenExpiry - Date.now();
+      // Refresh if token expires in less than 5 minutes
+      if (timeUntilExpiry < 5 * 60 * 1000) {
+        logInfo('Session', 'Refreshing OAuth token during session refresh');
+        const refreshResult = await refreshAccessToken(req.session.refreshToken);
+        req.session.accessToken = refreshResult.accessToken;
+        if (refreshResult.expiresIn) {
+          req.session.tokenExpiry = Date.now() + (refreshResult.expiresIn * 1000);
+        }
+        delete req.session.lastOAuthError;
+      }
+    }
+    
+    const newExpiresAt = req.session.sessionCreatedAt + SESSION_MAX_AGE;
+    logInfo('Session', `Session refreshed for user: ${req.session.user}`, { expiresAt: new Date(newExpiresAt).toISOString() });
+    
+    res.json({
+      success: true,
+      message: 'Session refreshed successfully',
+      expiresAt: newExpiresAt,
+      user: req.session.user,
+    });
+  } catch (err) {
+    logError('Session', err, { context: 'Failed to refresh session' });
+    res.json({
+      success: false,
+      message: err instanceof Error ? err.message : 'Failed to refresh session',
+    });
+  }
+});
+
+// Session status endpoint - returns current session info
+app.get('/session/status', requireAuth, (req, res) => {
+  const sessionCreatedAt = req.session.sessionCreatedAt || Date.now();
+  const sessionExpiresAt = sessionCreatedAt + SESSION_MAX_AGE;
+  const timeRemaining = sessionExpiresAt - Date.now();
+  const tokenExpiresAt = req.session.tokenExpiry || null;
+  
+  res.json({
+    authenticated: true,
+    user: req.session.user,
+    session: {
+      createdAt: sessionCreatedAt,
+      expiresAt: sessionExpiresAt,
+      timeRemaining: Math.max(0, timeRemaining),
+      isExpiringSoon: timeRemaining <= SESSION_WARNING_THRESHOLD && timeRemaining > 0,
+    },
+    token: {
+      expiresAt: tokenExpiresAt,
+      isExpired: tokenExpiresAt ? Date.now() > tokenExpiresAt : null,
+    },
   });
 });
 
@@ -1010,6 +1556,29 @@ function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+/**
+ * Syntax highlight JSON for display
+ * Returns HTML with colored spans for different JSON elements
+ */
+function syntaxHighlightJson(json: string): string {
+  // First escape HTML entities
+  const escaped = escapeHtml(json);
+  
+  // Apply syntax highlighting with regex
+  return escaped
+    // Strings (keys and values) - must handle escaped quotes
+    .replace(/"([^"\\]*(\\.[^"\\]*)*)"/g, (match) => {
+      // Check if this is a key (followed by :) or a value
+      return `<span class="json-string">${match}</span>`;
+    })
+    // Numbers
+    .replace(/\b(-?\d+\.?\d*)\b/g, '<span class="json-number">$1</span>')
+    // Booleans
+    .replace(/\b(true|false)\b/g, '<span class="json-boolean">$1</span>')
+    // Null
+    .replace(/\bnull\b/g, '<span class="json-null">null</span>');
 }
 
 function extractName(from: string): string {
@@ -1066,31 +1635,270 @@ function formatDate(date: Date | null): string {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+/**
+ * Add a diagnostic operation to the session history
+ * Keeps only the last 10 operations
+ */
+function addToHistory(req: Request, action: string, result: DiagnosticResult, params: Record<string, any>): void {
+  if (!req.session.diagnosticsHistory) {
+    req.session.diagnosticsHistory = [];
+  }
+  
+  // Truncate large details for storage
+  let truncatedDetails = result.details;
+  const detailsStr = JSON.stringify(result.details);
+  if (detailsStr.length > 5000) {
+    truncatedDetails = { 
+      _truncated: true, 
+      _message: 'Result too large to store in history. Re-run to see full result.',
+      _preview: detailsStr.substring(0, 500) + '...'
+    };
+  }
+  
+  const entry: DiagnosticsHistoryEntry = {
+    id: crypto.randomBytes(8).toString('hex'),
+    action,
+    title: result.title,
+    success: result.success,
+    timestamp: Date.now(),
+    params,
+    details: truncatedDetails,
+  };
+  
+  // Add to beginning of array (most recent first)
+  req.session.diagnosticsHistory.unshift(entry);
+  
+  // Keep only last 10 entries
+  if (req.session.diagnosticsHistory.length > 10) {
+    req.session.diagnosticsHistory = req.session.diagnosticsHistory.slice(0, 10);
+  }
+}
+
+/**
+ * Format timestamp for display in history
+ */
+function formatHistoryTimestamp(timestamp: number): string {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diffMs = now.getTime() - timestamp;
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  
+  if (diffMins < 1) {
+    return 'Just now';
+  } else if (diffMins < 60) {
+    return `${diffMins}m ago`;
+  } else if (diffHours < 24 && date.toDateString() === now.toDateString()) {
+    return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  } else {
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+}
+
 type DiagnosticResult = {
   title: string;
   success: boolean;
   details: any;
 };
 
-function renderDiagnosticsPage(result?: DiagnosticResult): string {
-  const resultBlock = result ? `
-    <div class="card">
-      <h2>${escapeHtml(result.title)}</h2>
-      <div class="${result.success ? 'info' : 'error'}">${result.success ? 'Success' : 'Failed'}</div>
-      ${typeof result.details === 'string'
-        ? `<pre>${escapeHtml(result.details)}</pre>`
-        : `<pre>${escapeHtml(JSON.stringify(result.details, null, 2))}</pre>`}
+function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsHistoryEntry[]): string {
+  // Helper to determine if result should be collapsed by default
+  const getResultJson = (details: any): string => {
+    return typeof details === 'string' ? details : JSON.stringify(details, null, 2);
+  };
+  
+  const resultJson = result ? getResultJson(result.details) : '';
+  const lineCount = resultJson.split('\n').length;
+  const shouldCollapse = lineCount > 20; // Collapse if more than 20 lines
+  
+  // Render history section
+  const historyBlock = history && history.length > 0 ? `
+    <div class="card" id="history-card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+        <h2 style="margin: 0;">📜 Operation History</h2>
+        <span style="color: #666; font-size: 0.85rem;">${history.length} operation${history.length !== 1 ? 's' : ''}</span>
+      </div>
+      <div style="max-height: 300px; overflow-y: auto;">
+        ${history.map((entry, index) => `
+          <div class="history-entry" style="padding: 0.75rem; border: 1px solid #eee; border-radius: 6px; margin-bottom: 0.5rem; background: ${entry.success ? '#f8fff8' : '#fff8f8'};">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+              <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <span style="font-size: 1rem;">${entry.success ? '✓' : '✗'}</span>
+                <strong style="font-size: 0.9rem;">${escapeHtml(entry.title)}</strong>
+              </div>
+              <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <span style="color: #666; font-size: 0.8rem;">${formatHistoryTimestamp(entry.timestamp)}</span>
+                <button class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" onclick="rerunOperation('${entry.action}', ${escapeHtml(JSON.stringify(JSON.stringify(entry.params)))})" title="Re-run this operation">
+                  🔄 Re-run
+                </button>
+                <button class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" onclick="toggleHistoryDetails('history-details-${index}')" title="Show/hide details">
+                  📋 Details
+                </button>
+              </div>
+            </div>
+            <div style="font-size: 0.8rem; color: #666; margin-bottom: 0.5rem;">
+              Action: <code>${escapeHtml(entry.action)}</code>
+              ${Object.keys(entry.params).length > 0 ? ` | Params: ${Object.entries(entry.params).map(([k, v]) => `${k}=${typeof v === 'string' && v.length > 20 ? v.substring(0, 20) + '...' : v}`).join(', ')}` : ''}
+            </div>
+            <div id="history-details-${index}" style="display: none; margin-top: 0.5rem;">
+              <pre class="json-highlight" style="font-size: 0.8rem; padding: 0.5rem; margin: 0; max-height: 150px; overflow: auto;">${syntaxHighlightJson(getResultJson(entry.details))}</pre>
+            </div>
+          </div>
+        `).join('')}
+      </div>
     </div>
+    <script>
+      function toggleHistoryDetails(id) {
+        var el = document.getElementById(id);
+        if (el) {
+          el.style.display = el.style.display === 'none' ? 'block' : 'none';
+        }
+      }
+      
+      function rerunOperation(action, paramsJson) {
+        var params = JSON.parse(paramsJson);
+        var form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '/diagnostics/' + action;
+        form.style.display = 'none';
+        
+        for (var key in params) {
+          if (params.hasOwnProperty(key)) {
+            var input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = key;
+            input.value = params[key];
+            form.appendChild(input);
+          }
+        }
+        
+        document.body.appendChild(form);
+        showLoading('Re-running ' + action + '...');
+        form.submit();
+      }
+    </script>
+  ` : '';
+  
+  const resultBlock = result ? `
+    <div class="card" id="result-card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+        <h2 style="margin: 0;">${escapeHtml(result.title)}</h2>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <button class="btn btn-secondary" style="padding: 0.4rem 0.75rem; font-size: 0.85rem;" onclick="copyResultToClipboard()" title="Copy to clipboard">
+            📋 Copy
+          </button>
+          ${shouldCollapse ? `
+          <button class="btn btn-secondary" style="padding: 0.4rem 0.75rem; font-size: 0.85rem;" onclick="toggleResultCollapse()" id="collapse-btn" title="Expand/Collapse">
+            ▼ Expand
+          </button>
+          ` : ''}
+        </div>
+      </div>
+      <div class="${result.success ? 'success' : 'error'}" style="margin-bottom: 0.75rem;">${result.success ? '✓ Success' : '✗ Failed'}</div>
+      <div id="result-container" class="${shouldCollapse ? 'collapsed' : ''}" style="${shouldCollapse ? 'max-height: 200px; overflow: hidden; position: relative;' : ''}">
+        <pre id="result-json" class="json-highlight">${syntaxHighlightJson(resultJson)}</pre>
+        ${shouldCollapse ? `
+        <div id="collapse-gradient" style="position: absolute; bottom: 0; left: 0; right: 0; height: 60px; background: linear-gradient(transparent, white); pointer-events: none;"></div>
+        ` : ''}
+      </div>
+      <div id="result-raw" style="display: none;">${escapeHtml(resultJson)}</div>
+    </div>
+    <script>
+      // Define showToast locally if not already defined (ensures it's available for result block)
+      if (typeof window.showToast !== 'function') {
+        window.showToast = function(message, type) {
+          var toast = document.createElement('div');
+          toast.className = 'toast toast-' + (type || 'info');
+          toast.textContent = message;
+          document.body.appendChild(toast);
+          setTimeout(function() {
+            toast.style.animation = 'fadeOut 0.3s ease-out forwards';
+            setTimeout(function() { toast.remove(); }, 300);
+          }, 3000);
+        };
+      }
+      
+      // Copy result to clipboard
+      function copyResultToClipboard() {
+        var rawText = document.getElementById('result-raw').textContent;
+        navigator.clipboard.writeText(rawText).then(function() {
+          window.showToast('Copied to clipboard!', 'success');
+        }).catch(function(err) {
+          // Fallback for older browsers
+          var textarea = document.createElement('textarea');
+          textarea.value = rawText;
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.select();
+          try {
+            document.execCommand('copy');
+            window.showToast('Copied to clipboard!', 'success');
+          } catch (e) {
+            window.showToast('Failed to copy', 'error');
+          }
+          document.body.removeChild(textarea);
+        });
+      }
+      
+      // Toggle collapse/expand
+      var isCollapsed = ${shouldCollapse};
+      function toggleResultCollapse() {
+        var container = document.getElementById('result-container');
+        var btn = document.getElementById('collapse-btn');
+        var gradient = document.getElementById('collapse-gradient');
+        
+        if (isCollapsed) {
+          container.style.maxHeight = 'none';
+          container.style.overflow = 'visible';
+          if (gradient) gradient.style.display = 'none';
+          btn.textContent = '▲ Collapse';
+          isCollapsed = false;
+        } else {
+          container.style.maxHeight = '200px';
+          container.style.overflow = 'hidden';
+          if (gradient) gradient.style.display = 'block';
+          btn.textContent = '▼ Expand';
+          isCollapsed = true;
+        }
+      }
+    </script>
+    ${result.success ? `
+    <script>
+      // Show success toast
+      (function() {
+        var toast = document.createElement('div');
+        toast.className = 'toast toast-success';
+        toast.textContent = '${escapeHtml(result.title)} completed successfully';
+        document.body.appendChild(toast);
+        setTimeout(function() {
+          toast.style.animation = 'fadeOut 0.3s ease-out forwards';
+          setTimeout(function() { toast.remove(); }, 300);
+        }, 3000);
+      })();
+    </script>
+    ` : ''}
   ` : '';
 
   return `
     ${resultBlock}
+    
+    ${historyBlock}
+    
+    <!-- Loading overlay -->
+    <div id="loading-overlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.8); z-index: 999; justify-content: center; align-items: center;">
+      <div style="text-align: center;">
+        <div class="loading-spinner" style="width: 40px; height: 40px; border-width: 4px;"></div>
+        <p style="margin-top: 1rem; color: #666;" id="loading-text">Processing...</p>
+      </div>
+    </div>
+    
     <div class="card">
       <h2>Capabilities</h2>
       <p style="color: #666; font-size: 0.85rem; margin-bottom: 0.75rem;">
         Lists all IMAP capabilities supported by the server, including extensions like IDLE, CONDSTORE, and QRESYNC.
       </p>
-      <form method="post" action="/diagnostics/capabilities">
+      <form method="post" action="/diagnostics/capabilities" class="diagnostics-form">
         <button class="btn" type="submit">Refresh & List Capabilities</button>
       </form>
     </div>
@@ -1116,7 +1924,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult): string {
         <div id="mailbox-list-content" style="margin-top: 0.5rem; font-family: monospace; font-size: 0.85rem;"></div>
       </div>
 
-      <form method="post" action="/diagnostics/add-box" class="form-row">
+      <form method="post" action="/diagnostics/add-box" class="form-row diagnostics-form">
         <label>Mailbox name
           <input name="mailboxName" placeholder="e.g., Test-Folder or Archive/2024" required 
                  title="Name for the new mailbox. Use / for nested folders (e.g., Archive/2024)."
@@ -1126,7 +1934,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult): string {
         </label>
         <button class="btn" type="submit">Create Mailbox</button>
       </form>
-      <form method="post" action="/diagnostics/rename-box" class="form-row">
+      <form method="post" action="/diagnostics/rename-box" class="form-row diagnostics-form">
         <label>Current name
           <input name="fromName" placeholder="e.g., Old-Folder" required 
                  title="The current name of the mailbox to rename">
@@ -1137,7 +1945,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult): string {
         </label>
         <button class="btn" type="submit">Rename Mailbox</button>
       </form>
-      <form method="post" action="/diagnostics/delete-box" class="form-row">
+      <form method="post" action="/diagnostics/delete-box" class="form-row diagnostics-form">
         <label>Mailbox name
           <input name="mailboxName" placeholder="e.g., Test-Folder" required 
                  title="Name of the mailbox to delete. Warning: This cannot be undone!">
@@ -1145,6 +1953,64 @@ function renderDiagnosticsPage(result?: DiagnosticResult): string {
         <button class="btn btn-danger" type="submit">Delete Mailbox</button>
       </form>
     </div>
+
+    <script>
+      // Loading state management
+      function showLoading(message) {
+        var overlay = document.getElementById('loading-overlay');
+        var text = document.getElementById('loading-text');
+        if (overlay && text) {
+          text.textContent = message || 'Processing...';
+          overlay.style.display = 'flex';
+        }
+      }
+      
+      function hideLoading() {
+        var overlay = document.getElementById('loading-overlay');
+        if (overlay) {
+          overlay.style.display = 'none';
+        }
+      }
+      
+      // Define showToast on window for global access
+      window.showToast = function(message, type) {
+        var toast = document.createElement('div');
+        toast.className = 'toast toast-' + (type || 'info');
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        setTimeout(function() {
+          toast.style.animation = 'fadeOut 0.3s ease-out forwards';
+          setTimeout(function() { toast.remove(); }, 300);
+        }, 3000);
+      };
+      
+      // Local alias for convenience
+      function showToast(message, type) {
+        window.showToast(message, type);
+      }
+      
+      // Attach loading state to all diagnostics forms
+      document.addEventListener('DOMContentLoaded', function() {
+        var forms = document.querySelectorAll('.diagnostics-form');
+        forms.forEach(function(form) {
+          form.addEventListener('submit', function(e) {
+            var btn = form.querySelector('button[type="submit"]');
+            var action = form.action.split('/').pop();
+            var actionName = action.replace(/-/g, ' ').replace(/\\b\\w/g, function(l) { return l.toUpperCase(); });
+            
+            // Show loading state
+            showLoading('Running ' + actionName + '...');
+            
+            // Disable all form buttons
+            var buttons = document.querySelectorAll('.diagnostics-form button');
+            buttons.forEach(function(b) {
+              b.disabled = true;
+              b.style.opacity = '0.6';
+            });
+          });
+        });
+      });
+    </script>
 
     <script>
       document.addEventListener('DOMContentLoaded', function() {
@@ -1275,7 +2141,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult): string {
       </p>
       
       <h3 style="font-size: 0.95rem; margin: 1rem 0 0.5rem; color: #444;">Open Mailbox</h3>
-      <form method="post" action="/diagnostics/open-box" class="form-row">
+      <form method="post" action="/diagnostics/open-box" class="form-row diagnostics-form">
         <label>Mailbox
           <input name="mailbox" value="INBOX" required 
                  title="Mailbox to open. Use INBOX for primary inbox, or folder names like [Gmail]/Sent Mail">
@@ -1288,7 +2154,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult): string {
       </form>
 
       <h3 style="font-size: 0.95rem; margin: 1rem 0 0.5rem; color: #444;">Search Messages</h3>
-      <form method="post" action="/diagnostics/search" class="form-row">
+      <form method="post" action="/diagnostics/search" class="form-row diagnostics-form">
         <label>Mailbox
           <input name="mailbox" value="INBOX" required 
                  title="Mailbox to search in">
@@ -1305,7 +2171,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult): string {
       </form>
 
       <h3 style="font-size: 0.95rem; margin: 1rem 0 0.5rem; color: #444;">Fetch Messages</h3>
-      <form method="post" action="/diagnostics/fetch" class="form-row">
+      <form method="post" action="/diagnostics/fetch" class="form-row diagnostics-form">
         <label>Mailbox
           <input name="mailbox" value="INBOX" required 
                  title="Mailbox to fetch from">
@@ -1324,7 +2190,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult): string {
       </form>
 
       <h3 style="font-size: 0.95rem; margin: 1rem 0 0.5rem; color: #444;">Flag Operations</h3>
-      <form method="post" action="/diagnostics/add-flags" class="form-row">
+      <form method="post" action="/diagnostics/add-flags" class="form-row diagnostics-form">
         <label>Mailbox
           <input name="mailbox" value="INBOX" required>
         </label>
@@ -1341,7 +2207,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult): string {
         <button class="btn" type="submit">Add Flags</button>
       </form>
 
-      <form method="post" action="/diagnostics/remove-flags" class="form-row">
+      <form method="post" action="/diagnostics/remove-flags" class="form-row diagnostics-form">
         <label>Mailbox
           <input name="mailbox" value="INBOX" required>
         </label>
@@ -1359,7 +2225,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult): string {
       </form>
 
       <h3 style="font-size: 0.95rem; margin: 1rem 0 0.5rem; color: #444;">Copy & Move</h3>
-      <form method="post" action="/diagnostics/copy" class="form-row">
+      <form method="post" action="/diagnostics/copy" class="form-row diagnostics-form">
         <label>Source mailbox
           <input name="mailbox" value="INBOX" required 
                  title="Mailbox containing the messages to copy">
@@ -1376,7 +2242,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult): string {
         <button class="btn" type="submit">Copy Messages</button>
       </form>
 
-      <form method="post" action="/diagnostics/move" class="form-row">
+      <form method="post" action="/diagnostics/move" class="form-row diagnostics-form">
         <label>Source mailbox
           <input name="mailbox" value="INBOX" required 
                  title="Mailbox containing the messages to move">
@@ -1394,7 +2260,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult): string {
       </form>
 
       <h3 style="font-size: 0.95rem; margin: 1rem 0 0.5rem; color: #444;">Expunge</h3>
-      <form method="post" action="/diagnostics/expunge" class="form-row">
+      <form method="post" action="/diagnostics/expunge" class="form-row diagnostics-form">
         <label>Mailbox
           <input name="mailbox" value="INBOX" required 
                  title="Mailbox to expunge. Permanently removes messages marked with \\Deleted flag."></label>
@@ -1568,7 +2434,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult): string {
         Opens a mailbox with QRESYNC parameters to get VANISHED UIDs since last sync.
         Requires saved uidValidity and lastModseq from a previous session.
       </p>
-      <form method="post" action="/diagnostics/qresync-open" class="form-row">
+      <form method="post" action="/diagnostics/qresync-open" class="form-row diagnostics-form">
         <label>Mailbox
           <input name="mailbox" value="INBOX" placeholder="e.g., INBOX" required title="The mailbox to open with QRESYNC">
         </label>
@@ -1589,7 +2455,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult): string {
         Fetches only messages that have changed since a given MODSEQ value.
         Useful for incremental synchronization.
       </p>
-      <form method="post" action="/diagnostics/fetch-changedsince" class="form-row">
+      <form method="post" action="/diagnostics/fetch-changedsince" class="form-row diagnostics-form">
         <label>Mailbox
           <input name="mailbox" value="INBOX" placeholder="e.g., INBOX" required title="The mailbox to fetch from">
         </label>
