@@ -1161,7 +1161,10 @@ export class ImapClient extends EventEmitter {
     this._capabilities.clear();
     for (const untagged of response.untagged) {
       if (untagged.type === 'CAPABILITY') {
-        const caps = String(untagged.data).split(' ');
+        // Data is already an array from the parser
+        const caps = Array.isArray(untagged.data) 
+          ? untagged.data 
+          : String(untagged.data).split(' ');
         for (const cap of caps) {
           if (cap) {
             this._capabilities.add(cap.toUpperCase());
