@@ -1,6 +1,6 @@
 {
   "name": "gmail-viewer-example",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Example Gmail email viewer web app using @dyanet/imap",
   "type": "module",
   "main": "dist/server.js",
@@ -21,7 +21,7 @@
   "license": "MIT",
   "dependencies": {
     "@dyanet/config-aws": "^1.0.3",
-    "@dyanet/imap": "^0.5.1",
+    "@dyanet/imap": "^0.5.2",
     "express": "^4.21.0",
     "express-session": "^1.18.0",
     "helmet": "^8.0.0",
