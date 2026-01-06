@@ -20,6 +20,6 @@ new GmailViewerCdkStack(app, 'GmailViewerCdkStack', {
   gitHubBranch: 'main',
   codeConnectionArn: 'arn:aws:codeconnections:ca-central-1:239030031457:connection/29fe5c11-23d2-4c10-a81d-4e880b12e2c6',
   useGitHubWebhooks: false,
-  apiCustomDomainName: 'mail.dyanet.com',
-  certificateArn: 'arn:aws:acm:ca-central-1:239030031457:certificate/af9150f1-4635-4154-8b19-e5449d57e971',
+  apiCustomDomainName: 'demo.dyanet.com',
+  certificateArn: 'arn:aws:acm:ca-central-1:239030031457:certificate/cb01610f-dddd-44e1-abd9-0672f0dc3355',
 });

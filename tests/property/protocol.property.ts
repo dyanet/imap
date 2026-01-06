@@ -41,11 +41,12 @@ const responseTextArb = fc.stringOf(
 
 /**
  * Generates valid IMAP atoms (no special characters)
+ * Excludes NIL (case-insensitive) as it's a reserved keyword
  */
 const atomArb = fc.stringOf(
   fc.constantFrom(...'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-'),
   { minLength: 1, maxLength: 20 }
-);
+).filter(s => s.toUpperCase() !== 'NIL');
 
 /**
  * Generates valid quoted strings (may contain spaces)
