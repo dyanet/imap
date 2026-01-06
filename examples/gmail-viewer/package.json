@@ -20,6 +20,9 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.0.0",
+    "@aws-sdk/client-secrets-manager": "^3.0.0",
+    "@aws-sdk/client-ssm": "^3.0.0",
     "@dyanet/config-aws": "^1.0.3",
     "@dyanet/imap": "^0.5.2",
     "express": "^4.21.0",
