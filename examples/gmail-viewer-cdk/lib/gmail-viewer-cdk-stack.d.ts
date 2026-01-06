@@ -2,6 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 export interface GmailViewerCdkStackProps extends cdk.StackProps {
     readonly vpcId?: string;
     readonly privateSubnets?: string[];
+    readonly publicSubnets?: string[];
     readonly containerPort?: number | string;
     readonly containerCpu?: number | string;
     readonly containerMemory?: number | string;
