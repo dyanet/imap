@@ -73,7 +73,7 @@ export class GmailViewerCdkStack extends cdk.Stack {
     const googleClientId = props.googleClientId || 'PLACEHOLDER_GOOGLE_CLIENT_ID';
     const googleClientSecret = props.googleClientSecret || 'PLACEHOLDER_GOOGLE_CLIENT_SECRET';
     const sessionSecretValue = props.sessionSecretValue || 'PLACEHOLDER_SESSION_SECRET';
-    const apiDomain = props.apiCustomDomainName ?? process.env.API_CUSTOM_DOMAIN ?? 'mail.dyanet.com';
+    const apiDomain = props.apiCustomDomainName ?? process.env.API_CUSTOM_DOMAIN ?? 'demo.dyanet.com';
     const certArn = props.certificateArn ?? this.node.tryGetContext('certificateArn') ?? process.env.CERTIFICATE_ARN;
     const zoneId = props.hostedZoneId ?? '';
     const hasCustomDomain = Boolean(certArn && apiDomain);
@@ -163,13 +163,16 @@ export class GmailViewerCdkStack extends cdk.Stack {
       name: 'mail-example', namespace, dnsRecordType: servicediscovery.DnsRecordType.SRV, dnsTtl: nsTtl, routingPolicy: servicediscovery.RoutingPolicy.WEIGHTED, customHealthCheck: { failureThreshold: 1 },
     });
 
-    // Secrets Manager - single secret with GOOGLE_CLIENT_SECRET and SESSION_SECRET
+    // Secrets Manager - all config values for the application
     const appSecrets = new secretsmanager.Secret(this, 'AppSecrets', {
-      secretName: `${ssmPrefix}/secrets`,
-      description: 'Application secrets for mail-example',
+      secretName: `${ssmPrefix}/config`,
+      description: 'Application configuration for mail-example',
       secretObjectValue: {
+        GOOGLE_CLIENT_ID: cdk.SecretValue.unsafePlainText(googleClientId),
         GOOGLE_CLIENT_SECRET: cdk.SecretValue.unsafePlainText(googleClientSecret),
         SESSION_SECRET: cdk.SecretValue.unsafePlainText(sessionSecretValue),
+        BASE_URL: cdk.SecretValue.unsafePlainText(baseUrl.toString()),
+        PORT: cdk.SecretValue.unsafePlainText(containerPort.toString()),
       },
     });
 
@@ -182,12 +185,6 @@ export class GmailViewerCdkStack extends cdk.Stack {
     taskRole.addToPolicy(new iam.PolicyStatement({ actions: ['ssm:GetParameter', 'ssm:GetParameters', 'ssm:GetParametersByPath', 'kms:Decrypt'], resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${ssmPrefix}*`, `arn:aws:kms:${this.region}:${this.account}:key/*`] }));
     taskRole.addToPolicy(new iam.PolicyStatement({ actions: ['secretsmanager:GetSecretValue'], resources: [appSecrets.secretArn] }));
 
-    // SSM Parameters (L2) - create before task definition so they can be referenced
-    const ssmBaseUrl = new ssm.StringParameter(this, 'SsmBaseUrl', { parameterName: `${ssmPrefix}/env/BASE_URL`, stringValue: baseUrl.toString() });
-    const ssmGoogleClientId = new ssm.StringParameter(this, 'SsmGoogleClientId', { parameterName: `${ssmPrefix}/env/GOOGLE_CLIENT_ID`, stringValue: googleClientId });
-    new ssm.StringParameter(this, 'SsmPort', { parameterName: `${ssmPrefix}/env/PORT`, stringValue: containerPort.toString() });
-    new ssm.StringParameter(this, 'SsmPublicEnv', { parameterName: `${ssmPrefix}/env/NODE_ENV`, stringValue: publicEnvValue });
-
     // ECS Task Definition (L2)
     const taskDef = new ecs.FargateTaskDefinition(this, 'AppTaskDefinition', { family: 'mail-example', cpu: containerCpu, memoryLimitMiB: containerMemory, executionRole: taskExecRole, taskRole });
     taskDef.addContainer('mail-example', {
@@ -195,7 +192,7 @@ export class GmailViewerCdkStack extends cdk.Stack {
       logging: ecs.LogDrivers.awsLogs({ logGroup: appLogGroup, streamPrefix: 'mail-example' }),
       environment: { CONFIG_SSM_PREFIX: ssmPrefix, PORT: containerPort.toString(), BASE_URL: baseUrl.toString(), NODE_ENV: publicEnvValue },
       secrets: {
-        GOOGLE_CLIENT_ID: ecs.Secret.fromSsmParameter(ssmGoogleClientId),
+        GOOGLE_CLIENT_ID: ecs.Secret.fromSecretsManager(appSecrets, 'GOOGLE_CLIENT_ID'),
         GOOGLE_CLIENT_SECRET: ecs.Secret.fromSecretsManager(appSecrets, 'GOOGLE_CLIENT_SECRET'),
         SESSION_SECRET: ecs.Secret.fromSecretsManager(appSecrets, 'SESSION_SECRET'),
       },
