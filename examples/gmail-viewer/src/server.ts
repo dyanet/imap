@@ -6,6 +6,8 @@
 
 import express, { Request, Response, NextFunction } from 'express';
 import session from 'express-session';
+import FileStoreFactory from 'session-file-store';
+const FileStore = FileStoreFactory(session);
 import helmet from 'helmet';
 import crypto from 'crypto';
 import { ConfigManager, SecretsManagerLoader, EnvironmentLoader, EnvFileLoader } from '@dyanet/config-aws';
@@ -360,6 +362,11 @@ const SESSION_MAX_AGE = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 const SESSION_WARNING_THRESHOLD = 30 * 60 * 1000; // 30 minutes before expiry
 
 app.use(session({
+  store: new FileStore({
+    path: '/tmp/sessions',
+    ttl: SESSION_MAX_AGE / 1000, // TTL in seconds
+    retries: 0,
+  }),
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
@@ -997,7 +1004,20 @@ app.get('/login', (req, res) => {
 app.get('/auth', (req, res) => {
   const state = generateState();
   req.session.oauthState = state;
-  res.redirect(buildAuthUrl(state));
+  // Explicitly save session before redirect to ensure state is persisted
+  req.session.save((err) => {
+    if (err) {
+      logError('OAuth2', err, { context: 'Failed to save session before OAuth redirect' });
+      res.send(baseTemplate('Error', `
+        <div class="card">
+          <div class="error">Failed to initialize authentication. Please try again.</div>
+          <a href="login" class="btn">Try Again</a>
+        </div>
+      `));
+      return;
+    }
+    res.redirect(buildAuthUrl(state));
+  });
 });
 
 app.get(CALLBACK_PATH, async (req, res) => {
