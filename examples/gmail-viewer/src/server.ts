@@ -1015,7 +1015,8 @@ app.get('/auth', (req, res) => {
   logInfo('OAuth2', 'Setting OAuth state in session', { 
     state: state.substring(0, 8) + '...', 
     sessionId: req.sessionID,
-    cookiePath: basePath || '/'
+    cookiePath: basePath || '/',
+    isNewSession: (req.session as any).isNew ?? 'unknown',
   });
   // Explicitly save session before redirect to ensure state is persisted
   req.session.save((err) => {
@@ -1029,7 +1030,12 @@ app.get('/auth', (req, res) => {
       `));
       return;
     }
-    logInfo('OAuth2', 'Session saved successfully, redirecting to Google', { sessionId: req.sessionID });
+    // Log the Set-Cookie header that will be sent
+    const setCookie = res.getHeader('Set-Cookie');
+    logInfo('OAuth2', 'Session saved successfully, redirecting to Google', { 
+      sessionId: req.sessionID,
+      setCookieHeader: setCookie ? String(setCookie).substring(0, 100) + '...' : '(none)',
+    });
     res.redirect(buildAuthUrl(state));
   });
 });
@@ -1037,10 +1043,14 @@ app.get('/auth', (req, res) => {
 app.get(CALLBACK_PATH, async (req, res) => {
   const { code, state, error } = req.query;
 
+  // Debug: log all cookies and headers to diagnose session issue
   logInfo('OAuth2', 'Callback received', { 
     sessionId: req.sessionID,
     hasOauthState: !!req.session.oauthState,
-    receivedState: typeof state === 'string' ? state.substring(0, 8) + '...' : '(none)'
+    receivedState: typeof state === 'string' ? state.substring(0, 8) + '...' : '(none)',
+    cookieHeader: req.headers.cookie || '(no cookie header)',
+    host: req.headers.host,
+    originalUrl: req.originalUrl,
   });
 
   if (error) {
