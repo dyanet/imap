@@ -365,6 +365,10 @@ const basePath = (() => {
 const SESSION_MAX_AGE = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 const SESSION_WARNING_THRESHOLD = 30 * 60 * 1000; // 30 minutes before expiry
 
+// In production behind API Gateway, we need sameSite: 'none' for OAuth redirects from Google
+// This requires secure: true (HTTPS only)
+const isProduction = process.env.NODE_ENV === 'production';
+
 app.use(session({
   store: new FileStore({
     path: '/tmp/sessions',
@@ -375,10 +379,10 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: process.env.NODE_ENV === 'production',
+    secure: isProduction,
     httpOnly: true,
     maxAge: SESSION_MAX_AGE,
-    sameSite: 'lax',
+    sameSite: isProduction ? 'none' : 'lax', // 'none' required for cross-site OAuth redirects
     path: basePath || '/',
   },
 }));
