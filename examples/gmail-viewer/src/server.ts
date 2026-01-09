@@ -248,7 +248,7 @@ function renderAuthErrorPage(errorMessage: string, countdownSeconds: number = 10
         Redirecting to login in <span id="countdown" class="countdown">${countdownSeconds}</span> seconds...
       </div>
       <div style="margin-top: 1.5rem;">
-        <a href="/auth" class="btn">Re-authenticate Now</a>
+        <a href="auth" class="btn">Re-authenticate Now</a>
         <button onclick="cancelCountdown()" class="btn btn-secondary" style="margin-left: 0.5rem;">Cancel</button>
       </div>
     </div>
@@ -272,7 +272,7 @@ function renderAuthErrorPage(errorMessage: string, countdownSeconds: number = 10
           clearInterval(countdownInterval);
           countdownInterval = null;
         }
-        document.querySelector('.countdown-text').innerHTML = 'Auto-redirect cancelled. <a href="/auth">Click here to re-authenticate</a>';
+        document.querySelector('.countdown-text').innerHTML = 'Auto-redirect cancelled. <a href="auth">Click here to re-authenticate</a>';
       }
       
       // Start countdown when page loads
@@ -876,9 +876,9 @@ const baseTemplate = (title: string, content: string, user?: string, sessionInfo
         </div>
         ` : ''}
       </div>
-      <a href="/inbox">Inbox</a>
-      <a href="/diagnostics">Diagnostics</a>
-      <a href="/logout">Logout</a>
+      <a href="inbox">Inbox</a>
+      <a href="diagnostics">Diagnostics</a>
+      <a href="logout">Logout</a>
     </div>` : ''}
   </div>
   <div class="container">${content}</div>
@@ -988,7 +988,7 @@ app.get('/login', (req, res) => {
       <h2>Welcome to Gmail Viewer</h2>
       ${expired ? '<div class="warning" style="margin: 1rem 0;">Your session has expired. Please sign in again.</div>' : ''}
       <p style="margin: 1.5rem 0; color: #666;">Sign in with your Google account to view your emails.</p>
-      <a href="/auth" class="btn">Sign in with Google</a>
+      <a href="auth" class="btn">Sign in with Google</a>
     </div>
   `));
 });
@@ -1007,7 +1007,7 @@ app.get(CALLBACK_PATH, async (req, res) => {
     res.send(baseTemplate('Error', `
       <div class="card">
         <div class="error">Authorization failed: ${error}</div>
-        <a href="/login" class="btn">Try Again</a>
+        <a href="login" class="btn">Try Again</a>
       </div>
     `));
     return;
@@ -1022,7 +1022,7 @@ app.get(CALLBACK_PATH, async (req, res) => {
     res.status(403).send(baseTemplate('Error', `
       <div class="card">
         <div class="error">Invalid state parameter. Possible CSRF attack.</div>
-        <a href="/login" class="btn">Try Again</a>
+        <a href="login" class="btn">Try Again</a>
       </div>
     `));
     return;
@@ -1035,7 +1035,7 @@ app.get(CALLBACK_PATH, async (req, res) => {
     res.send(baseTemplate('Error', `
       <div class="card">
         <div class="error">No authorization code received.</div>
-        <a href="/login" class="btn">Try Again</a>
+        <a href="login" class="btn">Try Again</a>
       </div>
     `));
     return;
@@ -1064,7 +1064,7 @@ app.get(CALLBACK_PATH, async (req, res) => {
     res.send(baseTemplate('Error', `
       <div class="card">
         <div class="error">Failed to authenticate: ${escapeHtml(classified.userFriendlyMessage)}</div>
-        <a href="/login" class="btn">Try Again</a>
+        <a href="login" class="btn">Try Again</a>
       </div>
     `));
   }
@@ -1090,7 +1090,7 @@ app.get('/inbox', requireAuth, async (req, res) => {
       <div class="card">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
           <h2>Inbox</h2>
-          <a href="/inbox" class="btn">Refresh</a>
+          <a href="inbox" class="btn">Refresh</a>
         </div>
         ${emailListHtml}
       </div>
@@ -1156,8 +1156,8 @@ app.get('/inbox', requireAuth, async (req, res) => {
         <div class="error" style="margin-top: 1rem;">${escapeHtml(errorDisplay.description)}</div>
         ${classified.imapCode ? `<p style="margin-top: 0.5rem; color: #666; font-size: 0.9rem;">Error code: ${escapeHtml(classified.imapCode)}</p>` : ''}
         <div style="margin-top: 1.5rem;">
-          <a href="/inbox" class="btn">Retry</a>
-          <a href="/logout" class="btn btn-danger" style="margin-left: 0.5rem;">Logout</a>
+          <a href="inbox" class="btn">Retry</a>
+          <a href="logout" class="btn btn-danger" style="margin-left: 0.5rem;">Logout</a>
         </div>
       </div>
     `, req.session.user, getSessionInfo(req)));
@@ -1473,9 +1473,9 @@ app.get('/debug/oauth', (req, res) => {
       
       <div style="margin-top: 1.5rem;">
         ${debugInfo.authenticated 
-          ? '<a href="/inbox" class="btn">Go to Inbox</a>' 
-          : '<a href="/login" class="btn">Login</a>'}
-        <a href="/debug/oauth" class="btn" style="margin-left: 0.5rem;">Refresh</a>
+          ? '<a href="inbox" class="btn">Go to Inbox</a>' 
+          : '<a href="login" class="btn">Login</a>'}
+        <a href="debug/oauth" class="btn" style="margin-left: 0.5rem;">Refresh</a>
       </div>
     </div>
   `, req.session.user, getSessionInfo(req)));
