@@ -329,6 +329,10 @@ const GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo';
 
 const app = express();
 
+// Trust proxy for running behind API Gateway/load balancer
+// Required for secure cookies to work correctly
+app.set('trust proxy', 1);
+
 // Security middleware
 app.use(helmet({
   contentSecurityPolicy: {
@@ -1004,6 +1008,11 @@ app.get('/login', (req, res) => {
 app.get('/auth', (req, res) => {
   const state = generateState();
   req.session.oauthState = state;
+  logInfo('OAuth2', 'Setting OAuth state in session', { 
+    state: state.substring(0, 8) + '...', 
+    sessionId: req.sessionID,
+    cookiePath: basePath || '/'
+  });
   // Explicitly save session before redirect to ensure state is persisted
   req.session.save((err) => {
     if (err) {
@@ -1016,12 +1025,19 @@ app.get('/auth', (req, res) => {
       `));
       return;
     }
+    logInfo('OAuth2', 'Session saved successfully, redirecting to Google', { sessionId: req.sessionID });
     res.redirect(buildAuthUrl(state));
   });
 });
 
 app.get(CALLBACK_PATH, async (req, res) => {
   const { code, state, error } = req.query;
+
+  logInfo('OAuth2', 'Callback received', { 
+    sessionId: req.sessionID,
+    hasOauthState: !!req.session.oauthState,
+    receivedState: typeof state === 'string' ? state.substring(0, 8) + '...' : '(none)'
+  });
 
   if (error) {
     logError('OAuth2', new Error(`Authorization failed: ${error}`), { error });
@@ -1038,7 +1054,8 @@ app.get(CALLBACK_PATH, async (req, res) => {
   if (!state || state !== req.session.oauthState) {
     logError('OAuth2', new Error('Invalid state parameter - possible CSRF attack'), { 
       receivedState: state, 
-      expectedState: req.session.oauthState ? '(set)' : '(not set)' 
+      expectedState: req.session.oauthState ? '(set)' : '(not set)',
+      sessionId: req.sessionID
     });
     res.status(403).send(baseTemplate('Error', `
       <div class="card">
