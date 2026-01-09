@@ -376,8 +376,8 @@ app.use(session({
     retries: 0,
   }),
   secret: SESSION_SECRET,
-  resave: false,
-  saveUninitialized: false,
+  resave: true,  // Required to ensure session is saved on every request
+  saveUninitialized: true,  // Required to set cookie on first request
   cookie: {
     secure: isProduction,
     httpOnly: true,
