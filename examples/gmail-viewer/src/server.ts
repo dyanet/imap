@@ -340,6 +340,16 @@ app.use(helmet({
   },
 }));
 
+// Extract base path from BASE_URL for path-aware redirects
+const basePath = (() => {
+  try {
+    const path = new URL(BASE_URL).pathname;
+    return path.endsWith('/') ? path.slice(0, -1) : path;
+  } catch {
+    return '';
+  }
+})();
+
 // Session configuration
 // Security: Using secure, httpOnly cookies with sameSite protection
 // - secure: Only send cookie over HTTPS in production
@@ -358,6 +368,7 @@ app.use(session({
     httpOnly: true,
     maxAge: SESSION_MAX_AGE,
     sameSite: 'lax',
+    path: basePath || '/',
   },
 }));
 
@@ -384,16 +395,6 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // Parse JSON bodies
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Extract base path from BASE_URL for path-aware redirects
-const basePath = (() => {
-  try {
-    const path = new URL(BASE_URL).pathname;
-    return path.endsWith('/') ? path.slice(0, -1) : path;
-  } catch {
-    return '';
-  }
-})();
 
 // Helper to create path-aware redirects
 const redirectWithBase = (path: string) => basePath + path;
@@ -1501,7 +1502,7 @@ app.get('/logout', (req, res) => {
     }
     // Clear the session cookie
     res.clearCookie('connect.sid', {
-      path: '/',
+      path: basePath || '/',
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
