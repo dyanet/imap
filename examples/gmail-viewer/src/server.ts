@@ -387,6 +387,22 @@ app.use(session({
   },
 }));
 
+// Debug middleware to log Set-Cookie headers on response finish
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const originalEnd = res.end.bind(res);
+  res.end = function(...args: any[]) {
+    const setCookie = res.getHeader('Set-Cookie');
+    if (req.path === '/auth' || req.path === '/callback') {
+      logInfo('ResponseHeaders', `Response finishing for ${req.path}`, {
+        setCookie: setCookie ? String(setCookie).substring(0, 150) : '(none)',
+        statusCode: res.statusCode,
+      });
+    }
+    return originalEnd(...args);
+  } as any;
+  next();
+});
+
 // Session expiry tracking middleware
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (req.session && req.session.accessToken) {
