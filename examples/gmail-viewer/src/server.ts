@@ -385,6 +385,29 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Extract base path from BASE_URL for path-aware redirects
+const basePath = (() => {
+  try {
+    const path = new URL(BASE_URL).pathname;
+    return path.endsWith('/') ? path.slice(0, -1) : path;
+  } catch {
+    return '';
+  }
+})();
+
+// Helper to create path-aware redirects
+const redirectWithBase = (path: string) => basePath + path;
+
+// Strip base path from incoming requests so routes work correctly
+if (basePath) {
+  app.use((req, res, next) => {
+    if (req.path.startsWith(basePath)) {
+      req.url = req.url.replace(basePath, '') || '/';
+    }
+    next();
+  });
+}
+
 /**
  * Generate a secure random state for OAuth2 CSRF protection
  */
@@ -628,7 +651,7 @@ async function refreshAccessToken(refreshToken: string, retryCount = 0): Promise
  */
 function requireAuth(req: Request, res: Response, next: NextFunction): void {
   if (!req.session.accessToken || !req.session.user) {
-    res.redirect('/login');
+    res.redirect(redirectWithBase('/login'));
     return;
   }
   next();
@@ -772,6 +795,7 @@ const baseTemplate = (title: string, content: string, user?: string, sessionInfo
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <base href="${basePath}/">
   <title>${title} - Gmail Viewer</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -934,9 +958,9 @@ const baseTemplate = (title: string, content: string, user?: string, sessionInfo
 // Routes
 app.get('/', (req, res) => {
   if (req.session.accessToken) {
-    res.redirect('/inbox');
+    res.redirect(redirectWithBase('/inbox'));
   } else {
-    res.redirect('/login');
+    res.redirect(redirectWithBase('/login'));
   }
 });
 
@@ -1031,7 +1055,7 @@ app.get(CALLBACK_PATH, async (req, res) => {
     delete req.session.lastOAuthError;
 
     logInfo('OAuth2', `Authentication successful for: ${email}`);
-    res.redirect('/inbox');
+    res.redirect(redirectWithBase('/inbox'));
   } catch (err) {
     logError('OAuth2', err, { context: 'Authentication failed' });
     const classified = classifyError(err);
@@ -1089,7 +1113,7 @@ app.get('/inbox', requireAuth, async (req, res) => {
         }
         delete req.session.lastOAuthError;
         logInfo('Inbox', 'Token refresh successful, redirecting...');
-        res.redirect('/inbox');
+        res.redirect(redirectWithBase('/inbox'));
         return;
       } catch (refreshErr) {
         logError('Inbox', refreshErr, { context: 'Token refresh failed - persistent auth failure' });
@@ -1482,7 +1506,7 @@ app.get('/logout', (req, res) => {
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
     });
-    res.redirect('/login');
+    res.redirect(redirectWithBase('/login'));
   });
 });
 
