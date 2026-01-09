@@ -29,12 +29,14 @@
     "express": "^4.21.0",
     "express-session": "^1.18.0",
     "helmet": "^8.0.0",
+    "session-file-store": "^1.5.0",
     "zod": "^3.22.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/express-session": "^1.18.0",
     "@types/node": "^20.10.0",
+    "@types/session-file-store": "^1.2.6",
     "typescript": "^5.3.0"
   },
   "engines": {
