@@ -333,6 +333,31 @@ const app = express();
 // Required for secure cookies to work correctly
 app.set('trust proxy', 1);
 
+// API Gateway HTTP API with VPC Link doesn't forward X-Forwarded-Proto header
+// We need to set it manually since we know all traffic comes through HTTPS API Gateway
+app.use((req, res, next) => {
+  // If no X-Forwarded-Proto header, assume HTTPS (API Gateway always terminates TLS)
+  if (!req.headers['x-forwarded-proto']) {
+    req.headers['x-forwarded-proto'] = 'https';
+  }
+  next();
+});
+
+// Debug middleware to log incoming request headers and protocol detection
+app.use((req, res, next) => {
+  if (req.path === '/auth' || req.path === '/callback') {
+    logInfo('RequestDebug', `Incoming request to ${req.path}`, {
+      protocol: req.protocol,
+      secure: req.secure,
+      xForwardedProto: req.headers['x-forwarded-proto'] || '(not set)',
+      xForwardedFor: req.headers['x-forwarded-for'] || '(not set)',
+      host: req.headers.host,
+      cookie: req.headers.cookie || '(no cookie)',
+    });
+  }
+  next();
+});
+
 // Security middleware
 app.use(helmet({
   contentSecurityPolicy: {
