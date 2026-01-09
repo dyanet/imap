@@ -1193,8 +1193,41 @@ app.get('/inbox', requireAuth, async (req, res) => {
     
     // Classify the error
     const classified = classifyError(err);
+    const errorMessage = err instanceof Error ? err.message : String(err);
     
-    // Try to refresh token if authentication failed
+    // Check if this is a scope-related auth error (IMAP returns scope info in XOAUTH2 errors)
+    // These errors cannot be fixed by refreshing - user must re-authenticate with correct scopes
+    const isScopeError = errorMessage.includes('scope') || 
+                         errorMessage.includes('mail.google.com') ||
+                         (errorMessage.includes('XOAUTH2') && errorMessage.includes('400'));
+    
+    if (classified.type === 'auth' && isScopeError) {
+      logInfo('Inbox', 'Scope-related auth error detected - re-authentication required');
+      
+      // Clear tokens and redirect to auth to get new tokens with correct scopes
+      const savedUser = req.session.user;
+      req.session.accessToken = undefined;
+      req.session.refreshToken = undefined;
+      req.session.tokenExpiry = undefined;
+      
+      res.send(baseTemplate('Re-authentication Required', `
+        <div class="card center">
+          <h2>Gmail Access Required</h2>
+          <div class="error" style="margin-top: 1rem;">
+            Your current authorization doesn't include Gmail access. This can happen if you denied the Gmail permission during sign-in.
+          </div>
+          <p style="margin-top: 1rem; color: #666;">
+            Please sign in again and make sure to grant access to Gmail when prompted.
+          </p>
+          <div style="margin-top: 1.5rem;">
+            <a href="auth" class="btn">Sign In with Gmail Access</a>
+          </div>
+        </div>
+      `, savedUser));
+      return;
+    }
+    
+    // Try to refresh token if authentication failed (but not scope errors)
     if (req.session.refreshToken && classified.type === 'auth') {
       try {
         logInfo('Inbox', 'Attempting token refresh...');
