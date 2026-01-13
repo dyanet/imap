@@ -74,7 +74,7 @@ function logError(context: string, error: unknown, additionalInfo?: Record<strin
   const timestamp = new Date().toISOString();
   const errorMessage = error instanceof Error ? error.message : String(error);
   const errorStack = error instanceof Error ? error.stack : undefined;
-  
+
   console.error(`[${timestamp}] [ERROR] [${context}]`, {
     message: errorMessage,
     stack: errorStack,
@@ -96,7 +96,7 @@ function logInfo(context: string, message: string, additionalInfo?: Record<strin
 function classifyError(error: unknown): ClassifiedError {
   const errorMessage = error instanceof Error ? error.message : String(error);
   const lowerMessage = errorMessage.toLowerCase();
-  
+
   // Authentication errors
   if (
     lowerMessage.includes('authenticationfailed') ||
@@ -115,7 +115,7 @@ function classifyError(error: unknown): ClassifiedError {
       recoverable: true,
     };
   }
-  
+
   // Network errors
   if (
     lowerMessage.includes('econnrefused') ||
@@ -136,11 +136,11 @@ function classifyError(error: unknown): ClassifiedError {
       recoverable: true,
     };
   }
-  
+
   // IMAP-specific errors (extract IMAP response codes if present)
   const imapCodeMatch = errorMessage.match(/\[([A-Z]+)\]/);
   const imapCode = imapCodeMatch ? imapCodeMatch[1] : undefined;
-  
+
   if (
     lowerMessage.includes('no such mailbox') ||
     lowerMessage.includes('mailbox does not exist') ||
@@ -156,7 +156,7 @@ function classifyError(error: unknown): ClassifiedError {
       recoverable: false,
     };
   }
-  
+
   if (
     lowerMessage.includes('cannot') ||
     lowerMessage.includes('permission') ||
@@ -172,7 +172,7 @@ function classifyError(error: unknown): ClassifiedError {
       recoverable: false,
     };
   }
-  
+
   if (imapCode === 'TRYCREATE') {
     return {
       type: 'imap',
@@ -183,7 +183,7 @@ function classifyError(error: unknown): ClassifiedError {
       recoverable: false,
     };
   }
-  
+
   // Generic IMAP error with code
   if (imapCode) {
     return {
@@ -195,7 +195,7 @@ function classifyError(error: unknown): ClassifiedError {
       recoverable: false,
     };
   }
-  
+
   // Unknown error
   return {
     type: 'unknown',
@@ -264,7 +264,7 @@ function renderAuthErrorPage(errorMessage: string, countdownSeconds: number = 10
           document.getElementById('countdown').textContent = countdownValue;
           if (countdownValue <= 0) {
             clearInterval(countdownInterval);
-            window.location.href = '/auth';
+            window.location.href = BASE_PATH + '/auth';
           }
         }, 1000);
       }
@@ -318,7 +318,7 @@ const CLIENT_ID = config.GOOGLE_CLIENT_ID;
 const CLIENT_SECRET = config.GOOGLE_CLIENT_SECRET;
 const PORT = config.PORT;
 const SESSION_SECRET = config.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
-const BASE_URL= config.BASE_URL || `http://localhost:${config.PORT}`;
+const BASE_URL = config.BASE_URL || `http://localhost:${config.PORT}`;
 const CALLBACK_PATH = '/callback';
 const GMAIL_SCOPES = ['https://mail.google.com/'];
 
@@ -415,7 +415,7 @@ app.use(session({
 // Debug middleware to log Set-Cookie headers on response finish
 app.use((req: Request, res: Response, next: NextFunction) => {
   const originalEnd = res.end.bind(res);
-  res.end = function(...args: any[]) {
+  res.end = function (...args: any[]) {
     const setCookie = res.getHeader('Set-Cookie');
     if (req.path === '/auth' || req.path === '/callback') {
       logInfo('ResponseHeaders', `Response finishing for ${req.path}`, {
@@ -435,11 +435,11 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     if (!req.session.sessionCreatedAt) {
       req.session.sessionCreatedAt = Date.now();
     }
-    
+
     // Check if session is about to expire
     const sessionAge = Date.now() - req.session.sessionCreatedAt;
     const timeRemaining = SESSION_MAX_AGE - sessionAge;
-    
+
     // Store session expiry info for UI display
     res.locals.sessionExpiresAt = req.session.sessionCreatedAt + SESSION_MAX_AGE;
     res.locals.sessionWarning = timeRemaining <= SESSION_WARNING_THRESHOLD && timeRemaining > 0;
@@ -528,7 +528,7 @@ async function exchangeCodeForTokens(code: string): Promise<{
       res.on('data', chunk => { data += chunk; });
       res.on('end', () => {
         logInfo('OAuth2', `Token exchange response status: ${res.statusCode}`);
-        
+
         if (res.statusCode !== 200) {
           const errorMsg = `Token exchange failed: HTTP ${res.statusCode} - ${data}`;
           logError('OAuth2', new Error(errorMsg), { statusCode: res.statusCode });
@@ -639,12 +639,12 @@ async function refreshAccessToken(refreshToken: string, retryCount = 0): Promise
       res.on('data', chunk => { data += chunk; });
       res.on('end', () => {
         logInfo('OAuth2', `Token refresh response status: ${res.statusCode}`);
-        
+
         // Check for HTTP errors
         if (res.statusCode !== 200) {
           const errorMsg = `Token refresh failed: HTTP ${res.statusCode} - ${data}`;
           logError('OAuth2', new Error(errorMsg), { statusCode: res.statusCode, attempt: retryCount + 1 });
-          
+
           // Retry on 5xx errors or network issues
           if (res.statusCode && res.statusCode >= 500 && retryCount < MAX_RETRIES) {
             const delay = BASE_DELAY * Math.pow(2, retryCount);
@@ -656,11 +656,11 @@ async function refreshAccessToken(refreshToken: string, retryCount = 0): Promise
             }, delay);
             return;
           }
-          
+
           reject(new Error(errorMsg));
           return;
         }
-        
+
         try {
           const response = JSON.parse(data);
           if (response.error) {
@@ -683,7 +683,7 @@ async function refreshAccessToken(refreshToken: string, retryCount = 0): Promise
 
     req.on('error', err => {
       logError('OAuth2', err, { context: 'Network error during token refresh', attempt: retryCount + 1 });
-      
+
       // Retry on network errors
       if (retryCount < MAX_RETRIES) {
         const delay = BASE_DELAY * Math.pow(2, retryCount);
@@ -695,7 +695,7 @@ async function refreshAccessToken(refreshToken: string, retryCount = 0): Promise
         }, delay);
         return;
       }
-      
+
       reject(err);
     });
     req.write(postData);
@@ -721,10 +721,10 @@ function getSessionInfo(req: Request): { expiresAt?: number; warning?: boolean }
   if (!req.session.accessToken || !req.session.sessionCreatedAt) {
     return undefined;
   }
-  
+
   const sessionExpiresAt = req.session.sessionCreatedAt + SESSION_MAX_AGE;
   const timeRemaining = sessionExpiresAt - Date.now();
-  
+
   return {
     expiresAt: sessionExpiresAt,
     warning: timeRemaining <= SESSION_WARNING_THRESHOLD && timeRemaining > 0,
@@ -773,10 +773,10 @@ async function fetchEmails(user: string, accessToken: string, limit: number = 20
     logInfo('IMAP', 'Opening INBOX...');
     await client.openBox('INBOX');
     logInfo('IMAP', 'INBOX opened');
-    
+
     const uids = await client.search(['ALL']);
     logInfo('IMAP', `Found ${uids.length} messages`);
-    
+
     const latestUids = uids.sort((a, b) => b - a).slice(0, limit);
 
     if (latestUids.length === 0) {
@@ -792,7 +792,7 @@ async function fetchEmails(user: string, accessToken: string, limit: number = 20
 
     return messages.map(msg => {
       const headerPart = msg.parts.find(p => p.which.toUpperCase().includes('HEADER'));
-      const headers = headerPart 
+      const headers = headerPart
         ? parseHeaders(typeof headerPart.body === 'string' ? headerPart.body : headerPart.body.toString())
         : new Map();
 
@@ -845,7 +845,7 @@ async function fetchEmails(user: string, accessToken: string, limit: number = 20
 const baseTemplate = (title: string, content: string, user?: string, sessionInfo?: { expiresAt?: number; warning?: boolean }) => {
   const sessionExpiresAt = sessionInfo?.expiresAt;
   const showWarning = sessionInfo?.warning;
-  
+
   return `
 <!DOCTYPE html>
 <html lang="en">
@@ -853,6 +853,7 @@ const baseTemplate = (title: string, content: string, user?: string, sessionInfo
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <base href="${basePath}/">
+  <script>const BASE_PATH = '${basePath}';</script>
   <title>${title} - Gmail Viewer</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -954,7 +955,7 @@ const baseTemplate = (title: string, content: string, user?: string, sessionInfo
       
       if (remaining <= 0) {
         // Session expired - redirect to login
-        window.location.href = '/login?expired=1';
+        window.location.href = BASE_PATH + '/login?expired=1';
         return;
       }
       
@@ -975,7 +976,7 @@ const baseTemplate = (title: string, content: string, user?: string, sessionInfo
     }
     
     function refreshSession() {
-      fetch('/session/refresh', { method: 'POST' })
+      fetch(BASE_PATH + '/session/refresh', { method: 'POST' })
         .then(r => r.json())
         .then(data => {
           if (data.success) {
@@ -1053,8 +1054,8 @@ app.get('/login', (req, res) => {
 app.get('/auth', (req, res) => {
   const state = generateState();
   req.session.oauthState = state;
-  logInfo('OAuth2', 'Setting OAuth state in session', { 
-    state: state.substring(0, 8) + '...', 
+  logInfo('OAuth2', 'Setting OAuth state in session', {
+    state: state.substring(0, 8) + '...',
     sessionId: req.sessionID,
     cookiePath: basePath || '/',
     isNewSession: (req.session as any).isNew ?? 'unknown',
@@ -1073,7 +1074,7 @@ app.get('/auth', (req, res) => {
     }
     // Log the Set-Cookie header that will be sent
     const setCookie = res.getHeader('Set-Cookie');
-    logInfo('OAuth2', 'Session saved successfully, redirecting to Google', { 
+    logInfo('OAuth2', 'Session saved successfully, redirecting to Google', {
       sessionId: req.sessionID,
       setCookieHeader: setCookie ? String(setCookie).substring(0, 100) + '...' : '(none)',
     });
@@ -1085,7 +1086,7 @@ app.get(CALLBACK_PATH, async (req, res) => {
   const { code, state, error } = req.query;
 
   // Debug: log all cookies and headers to diagnose session issue
-  logInfo('OAuth2', 'Callback received', { 
+  logInfo('OAuth2', 'Callback received', {
     sessionId: req.sessionID,
     hasOauthState: !!req.session.oauthState,
     receivedState: typeof state === 'string' ? state.substring(0, 8) + '...' : '(none)',
@@ -1107,8 +1108,8 @@ app.get(CALLBACK_PATH, async (req, res) => {
 
   // Verify state to prevent CSRF
   if (!state || state !== req.session.oauthState) {
-    logError('OAuth2', new Error('Invalid state parameter - possible CSRF attack'), { 
-      receivedState: state, 
+    logError('OAuth2', new Error('Invalid state parameter - possible CSRF attack'), {
+      receivedState: state,
       expectedState: req.session.oauthState ? '(set)' : '(not set)',
       sessionId: req.sessionID
     });
@@ -1153,7 +1154,7 @@ app.get(CALLBACK_PATH, async (req, res) => {
     logError('OAuth2', err, { context: 'Authentication failed' });
     const classified = classifyError(err);
     req.session.lastOAuthError = classified.message;
-    
+
     res.send(baseTemplate('Error', `
       <div class="card">
         <div class="error">Failed to authenticate: ${escapeHtml(classified.userFriendlyMessage)}</div>
@@ -1190,26 +1191,26 @@ app.get('/inbox', requireAuth, async (req, res) => {
     `, req.session.user, getSessionInfo(req)));
   } catch (err) {
     logError('Inbox', err, { user: req.session.user });
-    
+
     // Classify the error
     const classified = classifyError(err);
     const errorMessage = err instanceof Error ? err.message : String(err);
-    
+
     // Check if this is a scope-related auth error (IMAP returns scope info in XOAUTH2 errors)
     // These errors cannot be fixed by refreshing - user must re-authenticate with correct scopes
-    const isScopeError = errorMessage.includes('scope') || 
-                         errorMessage.includes('mail.google.com') ||
-                         (errorMessage.includes('XOAUTH2') && errorMessage.includes('400'));
-    
+    const isScopeError = errorMessage.includes('scope') ||
+      errorMessage.includes('mail.google.com') ||
+      (errorMessage.includes('XOAUTH2') && errorMessage.includes('400'));
+
     if (classified.type === 'auth' && isScopeError) {
       logInfo('Inbox', 'Scope-related auth error detected - re-authentication required');
-      
+
       // Clear tokens and redirect to auth to get new tokens with correct scopes
       const savedUser = req.session.user;
       req.session.accessToken = undefined;
       req.session.refreshToken = undefined;
       req.session.tokenExpiry = undefined;
-      
+
       res.send(baseTemplate('Re-authentication Required', `
         <div class="card center">
           <h2>Gmail Access Required</h2>
@@ -1226,7 +1227,7 @@ app.get('/inbox', requireAuth, async (req, res) => {
       `, savedUser));
       return;
     }
-    
+
     // Try to refresh token if authentication failed (but not scope errors)
     if (req.session.refreshToken && classified.type === 'auth') {
       try {
@@ -1244,13 +1245,13 @@ app.get('/inbox', requireAuth, async (req, res) => {
       } catch (refreshErr) {
         logError('Inbox', refreshErr, { context: 'Token refresh failed - persistent auth failure' });
         req.session.lastOAuthError = refreshErr instanceof Error ? refreshErr.message : 'Unknown error';
-        
+
         // Clear session on persistent auth failure and show countdown page
         const savedUser = req.session.user;
         req.session.accessToken = undefined;
         req.session.refreshToken = undefined;
         req.session.tokenExpiry = undefined;
-        
+
         res.send(baseTemplate('Authentication Required', renderAuthErrorPage(
           'Your session has expired and could not be refreshed. Please sign in again.',
           10
@@ -1265,7 +1266,7 @@ app.get('/inbox', requireAuth, async (req, res) => {
       req.session.accessToken = undefined;
       req.session.refreshToken = undefined;
       req.session.tokenExpiry = undefined;
-      
+
       res.send(baseTemplate('Authentication Required', renderAuthErrorPage(
         classified.userFriendlyMessage,
         10
@@ -1300,10 +1301,10 @@ app.get('/diagnostics/mailboxes-json', requireAuth, async (req, res) => {
     const client = await createImapClient(req.session.user!, req.session.accessToken!);
     try {
       const boxes = await client.getBoxes();
-      
+
       // Flatten the tree into a list of mailbox names with attributes
       const mailboxes: { name: string; attributes: string[] }[] = [];
-      
+
       function flattenTree(tree: any, prefix: string = '') {
         for (const [name, info] of Object.entries(tree)) {
           const fullName = prefix ? `${prefix}/${name}` : name;
@@ -1317,9 +1318,9 @@ app.get('/diagnostics/mailboxes-json', requireAuth, async (req, res) => {
           }
         }
       }
-      
+
       flattenTree(boxes);
-      
+
       // Sort: INBOX first, then [Gmail] folders, then others alphabetically
       mailboxes.sort((a, b) => {
         if (a.name === 'INBOX') return -1;
@@ -1328,7 +1329,7 @@ app.get('/diagnostics/mailboxes-json', requireAuth, async (req, res) => {
         if (!a.name.startsWith('[Gmail]') && b.name.startsWith('[Gmail]')) return 1;
         return a.name.localeCompare(b.name);
       });
-      
+
       res.json({ success: true, mailboxes });
     } finally {
       await client.end();
@@ -1342,32 +1343,32 @@ app.get('/diagnostics/mailboxes-json', requireAuth, async (req, res) => {
 app.post('/diagnostics/:action', requireAuth, async (req, res) => {
   const action = req.params.action;
   const params = { ...req.body };  // Copy params for history
-  
+
   try {
     const result = await handleDiagnosticsAction(action, req);
-    
+
     // Add to history
     addToHistory(req, action, result, params);
-    
+
     res.send(baseTemplate('Diagnostics', renderDiagnosticsPage(result, req.session.diagnosticsHistory), req.session.user, getSessionInfo(req)));
   } catch (err) {
     logError('Diagnostics', err, { action: action, user: req.session.user });
     const classified = classifyError(err);
-    
+
     // For auth errors, show the countdown page
     if (classified.type === 'auth') {
       const savedUser = req.session.user;
       req.session.accessToken = undefined;
       req.session.refreshToken = undefined;
       req.session.tokenExpiry = undefined;
-      
+
       res.send(baseTemplate('Authentication Required', renderAuthErrorPage(
         classified.userFriendlyMessage,
         10
       ), savedUser));
       return;
     }
-    
+
     const errorResult = {
       title: `Error: ${action}`,
       success: false,
@@ -1377,10 +1378,10 @@ app.post('/diagnostics/:action', requireAuth, async (req, res) => {
         ...(classified.imapCode && { imapCode: classified.imapCode }),
       },
     };
-    
+
     // Add error to history too
     addToHistory(req, action, errorResult, params);
-    
+
     res.send(baseTemplate('Diagnostics', renderDiagnosticsPage(errorResult, req.session.diagnosticsHistory), req.session.user, getSessionInfo(req)));
   }
 });
@@ -1415,11 +1416,11 @@ app.get('/diagnostics/idle/stream', requireAuth, async (req, res) => {
 
     // Create IMAP client
     const client = await createImapClient(req.session.user!, req.session.accessToken!);
-    
+
     // Check IDLE capability
     const capabilities = await client.refreshCapabilities();
     const hasIdle = client.hasCapability('IDLE');
-    
+
     if (!hasIdle) {
       res.write(`data: ${JSON.stringify({ type: 'error', message: 'Server does not support IDLE extension' })}\n\n`);
       await client.end();
@@ -1433,7 +1434,7 @@ app.get('/diagnostics/idle/stream', requireAuth, async (req, res) => {
 
     // Start IDLE
     const controller = await client.idle();
-    
+
     // Store session
     const idleSession = {
       client,
@@ -1520,7 +1521,7 @@ app.get('/diagnostics/idle/stream', requireAuth, async (req, res) => {
 app.post('/diagnostics/idle/stop', requireAuth, async (req, res) => {
   const sessionId = req.sessionID;
   const session = activeIdleSessions.get(sessionId);
-  
+
   if (!session) {
     res.json({ success: false, message: 'No active IDLE session' });
     return;
@@ -1576,18 +1577,18 @@ app.get('/debug/oauth', (req, res) => {
       
       <h3 style="margin-top: 1.5rem;">Session Status</h3>
       <pre>${escapeHtml(JSON.stringify({
-        authenticated: debugInfo.authenticated,
-        user: debugInfo.user,
-        hasAccessToken: debugInfo.hasAccessToken,
-        hasRefreshToken: debugInfo.hasRefreshToken,
-      }, null, 2))}</pre>
+    authenticated: debugInfo.authenticated,
+    user: debugInfo.user,
+    hasAccessToken: debugInfo.hasAccessToken,
+    hasRefreshToken: debugInfo.hasRefreshToken,
+  }, null, 2))}</pre>
       
       <h3 style="margin-top: 1rem;">Token Status</h3>
       <pre>${escapeHtml(JSON.stringify({
-        tokenExpiry: debugInfo.tokenExpiry,
-        expiresInSeconds: debugInfo.expiresInSeconds,
-        isExpired: debugInfo.isExpired,
-      }, null, 2))}</pre>
+    tokenExpiry: debugInfo.tokenExpiry,
+    expiresInSeconds: debugInfo.expiresInSeconds,
+    isExpired: debugInfo.isExpired,
+  }, null, 2))}</pre>
       
       ${debugInfo.lastError ? `
         <h3 style="margin-top: 1rem;">Last Error</h3>
@@ -1598,9 +1599,9 @@ app.get('/debug/oauth', (req, res) => {
       <pre>${escapeHtml(JSON.stringify(debugInfo.config, null, 2))}</pre>
       
       <div style="margin-top: 1.5rem;">
-        ${debugInfo.authenticated 
-          ? '<a href="inbox" class="btn">Go to Inbox</a>' 
-          : '<a href="login" class="btn">Login</a>'}
+        ${debugInfo.authenticated
+      ? '<a href="inbox" class="btn">Go to Inbox</a>'
+      : '<a href="login" class="btn">Login</a>'}
         <a href="debug/oauth" class="btn" style="margin-left: 0.5rem;">Refresh</a>
       </div>
     </div>
@@ -1619,7 +1620,7 @@ app.get('/logout', (req, res) => {
     req.session.lastOAuthError = undefined;
     req.session.sessionCreatedAt = undefined;
   }
-  
+
   // Destroy the session completely
   req.session.destroy((err) => {
     if (err) {
@@ -1641,7 +1642,7 @@ app.post('/session/refresh', requireAuth, async (req, res) => {
   try {
     // Reset session creation time to extend the session
     req.session.sessionCreatedAt = Date.now();
-    
+
     // If we have a refresh token and the access token is close to expiry, refresh it
     if (req.session.refreshToken && req.session.tokenExpiry) {
       const timeUntilExpiry = req.session.tokenExpiry - Date.now();
@@ -1656,10 +1657,10 @@ app.post('/session/refresh', requireAuth, async (req, res) => {
         delete req.session.lastOAuthError;
       }
     }
-    
+
     const newExpiresAt = req.session.sessionCreatedAt + SESSION_MAX_AGE;
     logInfo('Session', `Session refreshed for user: ${req.session.user}`, { expiresAt: new Date(newExpiresAt).toISOString() });
-    
+
     res.json({
       success: true,
       message: 'Session refreshed successfully',
@@ -1681,7 +1682,7 @@ app.get('/session/status', requireAuth, (req, res) => {
   const sessionExpiresAt = sessionCreatedAt + SESSION_MAX_AGE;
   const timeRemaining = sessionExpiresAt - Date.now();
   const tokenExpiresAt = req.session.tokenExpiry || null;
-  
+
   res.json({
     authenticated: true,
     user: req.session.user,
@@ -1715,7 +1716,7 @@ function escapeHtml(text: string): string {
 function syntaxHighlightJson(json: string): string {
   // First escape HTML entities
   const escaped = escapeHtml(json);
-  
+
   // Apply syntax highlighting with regex
   return escaped
     // Strings (keys and values) - must handle escaped quotes
@@ -1749,13 +1750,13 @@ function extractName(from: string): string {
  */
 function truncateString(str: string, maxLength: number): string {
   if (!str) return str;
-  
+
   // Use Array.from to properly handle Unicode characters
   const chars = Array.from(str);
   if (chars.length <= maxLength) {
     return str;
   }
-  
+
   return chars.slice(0, maxLength - 1).join('') + '…';
 }
 
@@ -1764,24 +1765,24 @@ function formatDate(date: Date | null): string {
   if (!date) {
     return '(No date)';
   }
-  
+
   // Double-check for invalid Date objects
   if (isNaN(date.getTime())) {
     return '(Invalid date)';
   }
-  
+
   const now = new Date();
   const isToday = date.toDateString() === now.toDateString();
-  
+
   if (isToday) {
     return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
   }
-  
+
   const isThisYear = date.getFullYear() === now.getFullYear();
   if (isThisYear) {
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   }
-  
+
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
@@ -1793,18 +1794,18 @@ function addToHistory(req: Request, action: string, result: DiagnosticResult, pa
   if (!req.session.diagnosticsHistory) {
     req.session.diagnosticsHistory = [];
   }
-  
+
   // Truncate large details for storage
   let truncatedDetails = result.details;
   const detailsStr = JSON.stringify(result.details);
   if (detailsStr.length > 5000) {
-    truncatedDetails = { 
-      _truncated: true, 
+    truncatedDetails = {
+      _truncated: true,
       _message: 'Result too large to store in history. Re-run to see full result.',
       _preview: detailsStr.substring(0, 500) + '...'
     };
   }
-  
+
   const entry: DiagnosticsHistoryEntry = {
     id: crypto.randomBytes(8).toString('hex'),
     action,
@@ -1814,10 +1815,10 @@ function addToHistory(req: Request, action: string, result: DiagnosticResult, pa
     params,
     details: truncatedDetails,
   };
-  
+
   // Add to beginning of array (most recent first)
   req.session.diagnosticsHistory.unshift(entry);
-  
+
   // Keep only last 10 entries
   if (req.session.diagnosticsHistory.length > 10) {
     req.session.diagnosticsHistory = req.session.diagnosticsHistory.slice(0, 10);
@@ -1833,7 +1834,7 @@ function formatHistoryTimestamp(timestamp: number): string {
   const diffMs = now.getTime() - timestamp;
   const diffMins = Math.floor(diffMs / 60000);
   const diffHours = Math.floor(diffMs / 3600000);
-  
+
   if (diffMins < 1) {
     return 'Just now';
   } else if (diffMins < 60) {
@@ -1856,11 +1857,11 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
   const getResultJson = (details: any): string => {
     return typeof details === 'string' ? details : JSON.stringify(details, null, 2);
   };
-  
+
   const resultJson = result ? getResultJson(result.details) : '';
   const lineCount = resultJson.split('\n').length;
   const shouldCollapse = lineCount > 20; // Collapse if more than 20 lines
-  
+
   // Render history section
   const historyBlock = history && history.length > 0 ? `
     <div class="card" id="history-card">
@@ -1909,7 +1910,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
         var params = JSON.parse(paramsJson);
         var form = document.createElement('form');
         form.method = 'POST';
-        form.action = '/diagnostics/' + action;
+        form.action = BASE_PATH + '/diagnostics/' + action;
         form.style.display = 'none';
         
         for (var key in params) {
@@ -1928,7 +1929,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
       }
     </script>
   ` : '';
-  
+
   const resultBlock = result ? `
     <div class="card" id="result-card">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
@@ -2048,7 +2049,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
       <p style="color: #666; font-size: 0.85rem; margin-bottom: 0.75rem;">
         Lists all IMAP capabilities supported by the server, including extensions like IDLE, CONDSTORE, and QRESYNC.
       </p>
-      <form method="post" action="/diagnostics/capabilities" class="diagnostics-form">
+      <form method="post" action="diagnostics/capabilities" class="diagnostics-form">
         <button class="btn" type="submit">Refresh & List Capabilities</button>
       </form>
     </div>
@@ -2074,7 +2075,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
         <div id="mailbox-list-content" style="margin-top: 0.5rem; font-family: monospace; font-size: 0.85rem;"></div>
       </div>
 
-      <form method="post" action="/diagnostics/add-box" class="form-row diagnostics-form">
+      <form method="post" action="diagnostics/add-box" class="form-row diagnostics-form">
         <label>Mailbox name
           <input name="mailboxName" placeholder="e.g., Test-Folder or Archive/2024" required 
                  title="Name for the new mailbox. Use / for nested folders (e.g., Archive/2024)."
@@ -2084,7 +2085,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
         </label>
         <button class="btn" type="submit">Create Mailbox</button>
       </form>
-      <form method="post" action="/diagnostics/rename-box" class="form-row diagnostics-form">
+      <form method="post" action="diagnostics/rename-box" class="form-row diagnostics-form">
         <label>Current name
           <input name="fromName" placeholder="e.g., Old-Folder" required 
                  title="The current name of the mailbox to rename">
@@ -2095,7 +2096,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
         </label>
         <button class="btn" type="submit">Rename Mailbox</button>
       </form>
-      <form method="post" action="/diagnostics/delete-box" class="form-row diagnostics-form">
+      <form method="post" action="diagnostics/delete-box" class="form-row diagnostics-form">
         <label>Mailbox name
           <input name="mailboxName" placeholder="e.g., Test-Folder" required 
                  title="Name of the mailbox to delete. Warning: This cannot be undone!">
@@ -2192,7 +2193,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
         dropdown.innerHTML = '<option value="">Loading...</option>';
         console.log('Loading mailboxes...');
         
-        fetch('/diagnostics/mailboxes-json')
+        fetch(BASE_PATH + '/diagnostics/mailboxes-json')
           .then(function(response) {
             console.log('Response status:', response.status);
             if (!response.ok) {
@@ -2291,7 +2292,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
       </p>
       
       <h3 style="font-size: 0.95rem; margin: 1rem 0 0.5rem; color: #444;">Open Mailbox</h3>
-      <form method="post" action="/diagnostics/open-box" class="form-row diagnostics-form">
+      <form method="post" action="diagnostics/open-box" class="form-row diagnostics-form">
         <label>Mailbox
           <input name="mailbox" value="INBOX" required 
                  title="Mailbox to open. Use INBOX for primary inbox, or folder names like [Gmail]/Sent Mail">
@@ -2304,7 +2305,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
       </form>
 
       <h3 style="font-size: 0.95rem; margin: 1rem 0 0.5rem; color: #444;">Search Messages</h3>
-      <form method="post" action="/diagnostics/search" class="form-row diagnostics-form">
+      <form method="post" action="diagnostics/search" class="form-row diagnostics-form">
         <label>Mailbox
           <input name="mailbox" value="INBOX" required 
                  title="Mailbox to search in">
@@ -2321,7 +2322,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
       </form>
 
       <h3 style="font-size: 0.95rem; margin: 1rem 0 0.5rem; color: #444;">Fetch Messages</h3>
-      <form method="post" action="/diagnostics/fetch" class="form-row diagnostics-form">
+      <form method="post" action="diagnostics/fetch" class="form-row diagnostics-form">
         <label>Mailbox
           <input name="mailbox" value="INBOX" required 
                  title="Mailbox to fetch from">
@@ -2340,7 +2341,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
       </form>
 
       <h3 style="font-size: 0.95rem; margin: 1rem 0 0.5rem; color: #444;">Flag Operations</h3>
-      <form method="post" action="/diagnostics/add-flags" class="form-row diagnostics-form">
+      <form method="post" action="diagnostics/add-flags" class="form-row diagnostics-form">
         <label>Mailbox
           <input name="mailbox" value="INBOX" required>
         </label>
@@ -2357,7 +2358,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
         <button class="btn" type="submit">Add Flags</button>
       </form>
 
-      <form method="post" action="/diagnostics/remove-flags" class="form-row diagnostics-form">
+      <form method="post" action="diagnostics/remove-flags" class="form-row diagnostics-form">
         <label>Mailbox
           <input name="mailbox" value="INBOX" required>
         </label>
@@ -2375,7 +2376,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
       </form>
 
       <h3 style="font-size: 0.95rem; margin: 1rem 0 0.5rem; color: #444;">Copy & Move</h3>
-      <form method="post" action="/diagnostics/copy" class="form-row diagnostics-form">
+      <form method="post" action="diagnostics/copy" class="form-row diagnostics-form">
         <label>Source mailbox
           <input name="mailbox" value="INBOX" required 
                  title="Mailbox containing the messages to copy">
@@ -2392,7 +2393,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
         <button class="btn" type="submit">Copy Messages</button>
       </form>
 
-      <form method="post" action="/diagnostics/move" class="form-row diagnostics-form">
+      <form method="post" action="diagnostics/move" class="form-row diagnostics-form">
         <label>Source mailbox
           <input name="mailbox" value="INBOX" required 
                  title="Mailbox containing the messages to move">
@@ -2410,7 +2411,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
       </form>
 
       <h3 style="font-size: 0.95rem; margin: 1rem 0 0.5rem; color: #444;">Expunge</h3>
-      <form method="post" action="/diagnostics/expunge" class="form-row diagnostics-form">
+      <form method="post" action="diagnostics/expunge" class="form-row diagnostics-form">
         <label>Mailbox
           <input name="mailbox" value="INBOX" required 
                  title="Mailbox to expunge. Permanently removes messages marked with \\Deleted flag."></label>
@@ -2466,7 +2467,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
         document.getElementById('idle-notification-list').innerHTML = '<p style="color: #999; font-size: 0.9rem;">Waiting for notifications...</p>';
         
         // Start SSE connection
-        idleEventSource = new EventSource('/diagnostics/idle/stream?mailbox=' + encodeURIComponent(mailbox) + '&timeout=' + timeout);
+        idleEventSource = new EventSource(BASE_PATH + '/diagnostics/idle/stream?mailbox=' + encodeURIComponent(mailbox) + '&timeout=' + timeout);
         
         idleEventSource.onmessage = function(event) {
           const data = JSON.parse(event.data);
@@ -2546,7 +2547,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
         }
         
         // Also call the stop endpoint
-        fetch('/diagnostics/idle/stop', { method: 'POST' })
+        fetch(BASE_PATH + '/diagnostics/idle/stop', { method: 'POST' })
           .then(r => r.json())
           .then(data => {
             document.getElementById('idle-status-text').textContent = data.message || 'IDLE stopped';
@@ -2584,7 +2585,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
         Opens a mailbox with QRESYNC parameters to get VANISHED UIDs since last sync.
         Requires saved uidValidity and lastModseq from a previous session.
       </p>
-      <form method="post" action="/diagnostics/qresync-open" class="form-row diagnostics-form">
+      <form method="post" action="diagnostics/qresync-open" class="form-row diagnostics-form">
         <label>Mailbox
           <input name="mailbox" value="INBOX" placeholder="e.g., INBOX" required title="The mailbox to open with QRESYNC">
         </label>
@@ -2605,7 +2606,7 @@ function renderDiagnosticsPage(result?: DiagnosticResult, history?: DiagnosticsH
         Fetches only messages that have changed since a given MODSEQ value.
         Useful for incremental synchronization.
       </p>
-      <form method="post" action="/diagnostics/fetch-changedsince" class="form-row diagnostics-form">
+      <form method="post" action="diagnostics/fetch-changedsince" class="form-row diagnostics-form">
         <label>Mailbox
           <input name="mailbox" value="INBOX" placeholder="e.g., INBOX" required title="The mailbox to fetch from">
         </label>
@@ -2701,11 +2702,11 @@ async function handleDiagnosticsAction(action: string, req: Request): Promise<Di
         const messages = await client.search(criteria, { bodies: ['HEADER.FIELDS (SUBJECT FROM DATE)'], markSeen: false });
         const samples = messages.slice(0, limit).map(msg => {
           // Find header part - it might be named 'HEADER' or 'HEADER.FIELDS (...)'
-          const headerPart = msg.parts?.find(p => 
-            p.which.toUpperCase().includes('HEADER') || 
+          const headerPart = msg.parts?.find(p =>
+            p.which.toUpperCase().includes('HEADER') ||
             p.which === 'HEADER.FIELDS (SUBJECT FROM DATE)'
           );
-          const headers = headerPart 
+          const headers = headerPart
             ? parseHeaders(typeof headerPart.body === 'string' ? headerPart.body : headerPart.body.toString())
             : new Map();
           return {
@@ -2804,26 +2805,26 @@ async function handleDiagnosticsAction(action: string, req: Request): Promise<Di
       const uidValidityStr = (req.body.uidValidity || '').trim();
       const lastModseqStr = (req.body.lastModseq || '').trim();
       const knownUids = (req.body.knownUids || '').trim();
-      
+
       if (!uidValidityStr) return { title: 'QRESYNC Open', success: false, details: 'UID Validity is required' };
       if (!lastModseqStr) return { title: 'QRESYNC Open', success: false, details: 'Last Known Modseq is required' };
-      
+
       const uidValidity = parseInt(uidValidityStr, 10);
       if (isNaN(uidValidity)) return { title: 'QRESYNC Open', success: false, details: 'Invalid UID Validity value' };
-      
+
       let lastKnownModseq: bigint;
       try {
         lastKnownModseq = BigInt(lastModseqStr);
       } catch {
         return { title: 'QRESYNC Open', success: false, details: 'Invalid Modseq value' };
       }
-      
+
       return withClient(user, accessToken, async (client) => {
         // Check if QRESYNC is supported
         await client.refreshCapabilities();
         const hasQresync = client.hasQresync();
         const hasCondstore = client.hasCondstore();
-        
+
         if (!hasQresync) {
           return {
             title: 'QRESYNC Open',
@@ -2832,13 +2833,13 @@ async function handleDiagnosticsAction(action: string, req: Request): Promise<Di
               error: 'Server does not support QRESYNC extension',
               hasCondstore,
               hasQresync,
-              suggestion: hasCondstore 
+              suggestion: hasCondstore
                 ? 'CONDSTORE is supported. Use "Fetch with CHANGEDSINCE" instead for incremental sync.'
                 : 'Neither CONDSTORE nor QRESYNC is supported by this server.',
             },
           };
         }
-        
+
         const qresyncParams: {
           uidValidity: number;
           lastKnownModseq: bigint;
@@ -2847,13 +2848,13 @@ async function handleDiagnosticsAction(action: string, req: Request): Promise<Di
           uidValidity,
           lastKnownModseq,
         };
-        
+
         if (knownUids) {
           qresyncParams.knownUids = knownUids;
         }
-        
+
         const result = await client.openBoxWithQresync(mailbox, qresyncParams);
-        
+
         return {
           title: 'QRESYNC Open',
           success: true,
@@ -2879,22 +2880,22 @@ async function handleDiagnosticsAction(action: string, req: Request): Promise<Di
       const uidsInput = (req.body.uids || '').trim();
       const changedSinceStr = (req.body.changedSince || '').trim();
       const bodies = parseBodiesInput(req.body.bodies);
-      
+
       if (!uidsInput) return { title: 'Fetch CHANGEDSINCE', success: false, details: 'UIDs are required' };
       if (!changedSinceStr) return { title: 'Fetch CHANGEDSINCE', success: false, details: 'Changed Since (Modseq) is required' };
-      
+
       let changedSince: bigint;
       try {
         changedSince = BigInt(changedSinceStr);
       } catch {
         return { title: 'Fetch CHANGEDSINCE', success: false, details: 'Invalid Modseq value' };
       }
-      
+
       return withClient(user, accessToken, async (client) => {
         // Check if CONDSTORE is supported
         await client.refreshCapabilities();
         const hasCondstore = client.hasCondstore();
-        
+
         if (!hasCondstore) {
           return {
             title: 'Fetch CHANGEDSINCE',
@@ -2906,12 +2907,12 @@ async function handleDiagnosticsAction(action: string, req: Request): Promise<Di
             },
           };
         }
-        
+
         await client.openBox(mailbox);
-        
+
         // Parse UIDs - support both ranges (1:*) and lists (1,2,3)
         const uidSequence = uidsInput.includes(':') ? uidsInput : parseUidList(uidsInput).join(',');
-        
+
         const fetched = await client.fetch(uidSequence, {
           bodies,
           struct: true,
@@ -2920,14 +2921,14 @@ async function handleDiagnosticsAction(action: string, req: Request): Promise<Di
           changedSince,
           modseq: true,
         });
-        
+
         const summary = fetched.map(msg => ({
           uid: msg.uid,
           flags: msg.attributes.flags,
           modseq: msg.attributes.modseq?.toString() || '(not available)',
           bodies: msg.parts.map(p => p.which),
         }));
-        
+
         return {
           title: 'Fetch CHANGEDSINCE',
           success: true,
@@ -2937,7 +2938,7 @@ async function handleDiagnosticsAction(action: string, req: Request): Promise<Di
             changedSince: changedSince.toString(),
             bodies,
             returnedCount: fetched.length,
-            note: fetched.length === 0 
+            note: fetched.length === 0
               ? 'No messages have changed since the specified MODSEQ value'
               : `${fetched.length} message(s) have changed since MODSEQ ${changedSince}`,
             messages: summary,
@@ -3008,7 +3009,7 @@ function parseSearchCriteria(input: string): SearchCriteria[] {
 app.listen(PORT, () => {
   console.log(`\n📧 Gmail Viewer running at ${BASE_URL}`);
   console.log(`\nMake sure to add "${BASE_URL}${CALLBACK_PATH}" to your OAuth2 redirect URIs\n`);
-  
+
   if (!CLIENT_ID || !CLIENT_SECRET) {
     console.log('⚠️  Warning: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET not set');
     console.log('   Set these environment variables to enable OAuth2 authentication\n');
