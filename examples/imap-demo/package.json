@@ -1,0 +1,18 @@
+{
+  "name": "imap-demo",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Static browser demo of @dyanet/imap's MIME header parsing, deployed to Cloudflare Workers",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "wrangler": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

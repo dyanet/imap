@@ -1,0 +1,80 @@
+name: Deploy demo
+
+# The static MIME-parsing demo at https://imap-demo.dyanet.workers.dev.
+#
+# This is a separate workflow from ci.yml on purpose. ci.yml deliberately
+# ignores `examples/**` (issue #22) so example changes don't run the
+# package's test and publish pipeline -- but the demo still has to redeploy
+# when it, or the library code it bundles, changes. Splitting them keeps
+# both properties instead of trading one for the other.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "examples/imap-demo/**"
+      # The demo bundles src/mime and src/encoding straight from source, so
+      # a library change to either one changes what the page serves.
+      - "src/mime/**"
+      - "src/encoding/**"
+      - ".github/workflows/deploy-imap-demo.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-imap-demo
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # The demo bundles the library's own source, so a library change that
+      # breaks the parsers should stop the deploy. ci.yml can't provide that
+      # gate here -- it doesn't run on example-only pushes -- so the suites
+      # run in this workflow directly.
+      - name: Install package dependencies
+        run: npm ci
+
+      - name: Run package tests
+        run: npm test
+
+      - name: Install demo dependencies
+        run: npm ci
+        working-directory: examples/imap-demo
+
+      - name: Build demo
+        run: npm run build
+        working-directory: examples/imap-demo
+
+      # Forks and unconfigured clones have no Cloudflare credentials. Skip
+      # with a notice rather than failing -- a demo that didn't deploy
+      # shouldn't render main red. The secrets context isn't available in a
+      # job-level `if`, so the check has to be a step.
+      - name: Check for Cloudflare credentials
+        id: cf
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::CLOUDFLARE_API_TOKEN is not set - skipping the demo deploy."
+          fi
+
+      - name: Deploy to Cloudflare Workers
+        if: steps.cf.outputs.configured == 'true'
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: examples/imap-demo

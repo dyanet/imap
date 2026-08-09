@@ -1,0 +1,4 @@
+node_modules/
+dist/
+# wrangler's local dev state (miniflare caches, temp bundles)
+.wrangler/

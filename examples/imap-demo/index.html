@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@dyanet/imap — MIME header parsing demo</title>
+    <meta
+      name="description"
+      content="Paste raw email headers and see @dyanet/imap parse them: RFC 2822 unfolding, RFC 2047 encoded words, and Content-Type parameters — running client-side."
+    />
+    <style>
+      /* Dyanet palette (DyanetDesignSystem/colors_and_type.css): clay
+         browns with an ember accent. */
+      :root {
+        --bg: #f7efe7;
+        --panel: #ffffff;
+        --ink: #1a1410;
+        --muted: #6f5749;
+        --line: #e2d7cc;
+        --accent: #a4541a;
+        --ok: #458036;
+        --bad: #b33a2a;
+        --code-bg: #f1ebe4;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1a1410;
+          --panel: #2a1f18;
+          --ink: #f7efe7;
+          --muted: #c6b6a8;
+          --line: #3d2e24;
+          --accent: #e58339;
+          --ok: #7cc46a;
+          --bad: #e8836f;
+          --code-bg: #33251c;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      code, textarea, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .wrap { max-width: 960px; margin: 0 auto; padding: 40px 20px 72px; }
+      h1 { font-size: 25px; margin: 0 0 6px; letter-spacing: -0.02em; }
+      h1 code { font-size: inherit; }
+      .tagline { color: var(--muted); margin: 0 0 14px; max-width: 66ch; }
+      .links a { color: var(--accent); text-decoration: none; margin-right: 16px; font-size: 14px; }
+      .links a:hover { text-decoration: underline; }
+      section {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 22px;
+        margin: 22px 0;
+      }
+      h2 { font-size: 16px; margin: 0 0 4px; }
+      .sub { color: var(--muted); font-size: 13.5px; margin: 0 0 16px; max-width: 72ch; }
+      label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+      textarea {
+        width: 100%;
+        min-height: 190px;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--bg);
+        color: var(--ink);
+        font-size: 13px;
+        resize: vertical;
+      }
+      textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+      .examples { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 7px; }
+      .examples button {
+        font: inherit; font-size: 12px;
+        padding: 4px 10px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--bg);
+        color: var(--muted);
+        cursor: pointer;
+      }
+      .examples button:hover { color: var(--ink); border-color: var(--accent); }
+      .out { margin-top: 16px; background: var(--code-bg); border-radius: 7px; padding: 14px; overflow-x: auto; }
+      .out h3 {
+        margin: 0 0 10px; font-size: 11px; text-transform: uppercase;
+        letter-spacing: 0.07em; color: var(--muted); font-weight: 600;
+      }
+      table { border-collapse: collapse; width: 100%; font-size: 13px; }
+      td { padding: 4px 0; vertical-align: top; }
+      td.k { color: var(--muted); padding-right: 18px; white-space: nowrap; width: 1%; }
+      td.v { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; word-break: break-word; }
+      .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+      @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+      .decoded { color: var(--ok); }
+      .raw { color: var(--muted); text-decoration: line-through; }
+      .err { color: var(--bad); font-size: 13px; }
+      footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+      footer code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+      footer a { color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <h1><code>@dyanet/imap</code> — MIME header parsing</h1>
+        <p class="tagline">
+          Paste raw email headers below. The RFC 2822 unfolding, RFC 2047
+          encoded-word decoding and Content-Type parsing all run in your
+          browser, using this library's own parsing code.
+        </p>
+        <div class="links">
+          <a href="https://github.com/dyanet/imap">GitHub</a>
+          <a href="https://github.com/dyanet/imap#readme">Docs</a>
+          <a href="https://github.com/dyanet/imap/pkgs/npm/imap">Package</a>
+        </div>
+      </header>
+
+      <section>
+        <h2>Raw headers</h2>
+        <p class="sub">
+          Folded continuation lines and <code>=?charset?B?…?=</code> /
+          <code>=?charset?Q?…?=</code> encoded words are both handled.
+        </p>
+        <label for="input">Paste headers (or pick an example)</label>
+        <textarea id="input" spellcheck="false"></textarea>
+        <div class="examples" id="examples"></div>
+      </section>
+
+      <div class="grid2">
+        <section>
+          <h2>parseHeaders()</h2>
+          <p class="sub">Unfolded, lower-cased keys, encoded words decoded.</p>
+          <div class="out"><div id="headers-out"></div></div>
+        </section>
+
+        <section>
+          <h2>decodeEncodedWords()</h2>
+          <p class="sub">Just the RFC 2047 layer, shown line by line.</p>
+          <div class="out"><div id="decoded-out"></div></div>
+        </section>
+      </div>
+
+      <section>
+        <h2>parseContentType()</h2>
+        <p class="sub">
+          Splits the media type from its parameters — the boundary token is
+          what drives multipart splitting.
+        </p>
+        <div class="out"><div id="ctype-out"></div></div>
+      </section>
+
+      <footer>
+        <p>
+          Static page on Cloudflare Workers. <code>src/mime</code> is bundled
+          straight from TypeScript with esbuild; only the MIME and encoding
+          modules are included, since the IMAP client itself opens TCP
+          sockets and has no meaning in a browser. Node's <code>Buffer</code>
+          is stood in for by a ~20-line shim over <code>atob</code> and
+          <code>TextDecoder</code> — see
+          <code>examples/imap-demo/buffer-shim.js</code>.
+        </p>
+      </footer>
+    </div>
+
+    <script type="module">
+      import { parseHeaders, decodeEncodedWords, parseContentType } from "./mime.js";
+
+      const EXAMPLES = {
+        "RFC 2047 (Q + B)": [
+          "From: =?utf-8?Q?Andr=C3=A9_M=C3=BCller?= <andre@example.com>",
+          "To: team@example.com",
+          "Subject: =?utf-8?B?4oCcUXVhcnRlcmx5IHJlcG9ydOKAnSDigJQgZmluYWw=?=",
+          "Date: Wed, 5 Aug 2026 09:14:22 +0200",
+          'Content-Type: text/plain; charset="utf-8"',
+        ].join("\n"),
+        "Folded header": [
+          "Subject: a subject line that was folded",
+          "  across three separate physical lines",
+          "  by the sending mail agent",
+          "From: sender@example.com",
+          "Content-Type: multipart/mixed;",
+          '\tboundary="----=_Part_4823_1029384756.1754380462"',
+        ].join("\n"),
+        Multipart: [
+          "From: notifications@example.com",
+          "Subject: Invoice attached",
+          'Content-Type: multipart/mixed; boundary="simple-boundary-42"',
+          "MIME-Version: 1.0",
+        ].join("\n"),
+        "Mixed charset": [
+          "Subject: =?iso-8859-1?Q?Caf=E9_r=E9union?= and =?utf-8?B?8J+Ygg==?=",
+          "From: =?utf-8?Q?=E6=9D=B1=E4=BA=AC?= <tokyo@example.jp>",
+          "Content-Type: text/html; charset=iso-8859-1",
+        ].join("\n"),
+      };
+
+      const input = document.getElementById("input");
+      const headersOut = document.getElementById("headers-out");
+      const decodedOut = document.getElementById("decoded-out");
+      const ctypeOut = document.getElementById("ctype-out");
+
+      const esc = (s) =>
+        String(s).replace(/[&<>"']/g, (c) =>
+          ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+        );
+
+      const table = (rows) =>
+        rows.length
+          ? "<table>" +
+            rows.map(([k, v]) => `<tr><td class="k">${esc(k)}</td><td class="v">${v}</td></tr>`).join("") +
+            "</table>"
+          : '<span class="err">nothing parsed</span>';
+
+      function run() {
+        const raw = input.value;
+
+        // parseHeaders returns a Map (lower-cased keys, encoded words
+        // already decoded), not a plain object -- Object.entries on it
+        // silently yields nothing.
+        try {
+          const headers = parseHeaders(raw);
+          headersOut.innerHTML = table(
+            [...headers.entries()].map(([k, v]) => [k, esc(Array.isArray(v) ? v.join(", ") : v)]),
+          );
+        } catch (e) {
+          headersOut.innerHTML = `<span class="err">${esc(e.message)}</span>`;
+        }
+
+        // Show the RFC 2047 layer on its own: strike the raw encoded word
+        // and show what it decodes to, so the transformation is visible
+        // rather than just the end result.
+        try {
+          const rows = raw
+            .split(/\r?\n/)
+            .filter((l) => l.trim() !== "")
+            .map((line) => {
+              const decoded = decodeEncodedWords(line);
+              const changed = decoded !== line;
+              return [
+                changed ? "decoded" : "unchanged",
+                changed
+                  ? `<span class="raw">${esc(line)}</span><br><span class="decoded">${esc(decoded)}</span>`
+                  : `<span>${esc(line)}</span>`,
+              ];
+            });
+          decodedOut.innerHTML = table(rows);
+        } catch (e) {
+          decodedOut.innerHTML = `<span class="err">${esc(e.message)}</span>`;
+        }
+
+        try {
+          const headers = parseHeaders(raw);
+          const ct = headers.get("content-type");
+          if (!ct) {
+            ctypeOut.innerHTML = '<span class="err">no Content-Type header present</span>';
+          } else {
+            // Shape is { type, subtype, params } -- type and subtype come
+            // back split, not as a single "text/plain".
+            const parsed = parseContentType(Array.isArray(ct) ? ct[0] : ct);
+            const rows = [
+              ["media type", esc(`${parsed.type}/${parsed.subtype}`)],
+              ["·  type", esc(parsed.type)],
+              ["·  subtype", esc(parsed.subtype)],
+            ];
+            for (const [k, v] of Object.entries(parsed.params ?? {})) {
+              rows.push([`param: ${k}`, esc(v)]);
+            }
+            ctypeOut.innerHTML = table(rows);
+          }
+        } catch (e) {
+          ctypeOut.innerHTML = `<span class="err">${esc(e.message)}</span>`;
+        }
+      }
+
+      const box = document.getElementById("examples");
+      for (const [label, text] of Object.entries(EXAMPLES)) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = label;
+        b.addEventListener("click", () => {
+          input.value = text;
+          run();
+        });
+        box.appendChild(b);
+      }
+
+      input.addEventListener("input", run);
+      input.value = EXAMPLES["RFC 2047 (Q + B)"];
+      run();
+    </script>
+  </body>
+</html>
