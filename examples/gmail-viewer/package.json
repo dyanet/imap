@@ -7,7 +7,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
-    "dev": "tsc && node dist/server.js"
+    "dev": "tsc && node dist/server.js",
+    "verify": "tsc --noEmit"
   },
   "keywords": [
     "gmail",
@@ -40,6 +41,6 @@
     "typescript": "^5.3.0"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   }
 }
