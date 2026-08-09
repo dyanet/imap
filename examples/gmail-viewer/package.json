@@ -7,7 +7,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
-    "dev": "tsc && node dist/server.js"
+    "dev": "tsc && node dist/server.js",
+    "verify": "tsc --noEmit"
   },
   "keywords": [
     "gmail",
@@ -20,13 +21,13 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.0.0",
-    "@aws-sdk/client-secrets-manager": "^3.0.0",
-    "@aws-sdk/client-ssm": "^3.0.0",
-    "@aws-sdk/credential-providers": "^3.0.0",
+    "@aws-sdk/client-s3": "^3.1090.0",
+    "@aws-sdk/client-secrets-manager": "^3.1090.0",
+    "@aws-sdk/client-ssm": "^3.1090.0",
+    "@aws-sdk/credential-providers": "^3.1090.0",
     "@dyanet/config-aws": "^1.0.3",
     "@dyanet/imap": "^0.5.2",
-    "express": "^4.21.0",
+    "express": "^4.22.2",
     "express-session": "^1.18.0",
     "helmet": "^8.0.0",
     "session-file-store": "^1.5.0",
@@ -40,6 +41,6 @@
     "typescript": "^5.3.0"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   }
 }
