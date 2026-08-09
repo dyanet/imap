@@ -1,0 +1,22 @@
+{
+  // Static demo of @dyanet/imap's MIME header parsing.
+  //
+  // Workers with static assets rather than Pages: Cloudflare publishes a
+  // one-way "migrate from Pages to Workers" guide and has deprecated
+  // Workers Sites in favour of Workers Assets, so a new Pages project
+  // would start on the wrong side of a migration.
+  //
+  // No `main` field -- assets-only, so requests are served straight from
+  // the asset store with no Worker script and no per-request compute.
+  "name": "imap-demo",
+  "compatibility_date": "2026-08-08",
+  "assets": {
+    "directory": "./dist",
+    // Single page, no client-side router: anything unmatched should be a
+    // real 404 rather than silently serving index.html.
+    "not_found_handling": "none"
+  },
+  "observability": {
+    "enabled": true
+  }
+}
