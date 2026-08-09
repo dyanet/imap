@@ -1,8 +1,10 @@
 # @dyanet/imap
 
 [![CI](https://github.com/dyanet/imap/actions/workflows/ci.yml/badge.svg)](https://github.com/dyanet/imap/actions/workflows/ci.yml)
+[![Coverage](./.github/badges/coverage.svg)](https://github.com/dyanet/imap/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@dyanet/imap.svg)](https://www.npmjs.com/package/@dyanet/imap)
 [![npm downloads](https://img.shields.io/npm/dm/@dyanet/imap.svg)](https://www.npmjs.com/package/@dyanet/imap)
+[![GitHub Packages](https://img.shields.io/badge/GitHub%20Packages-%40dyanet%2Fimap-2a1f18)](https://github.com/dyanet/imap/pkgs/npm/imap)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A modern, zero-dependency TypeScript IMAP client library that revives the discontinued [imap-simple](https://www.npmjs.com/package/imap-simple) package.
@@ -629,35 +631,115 @@ const connection = await ImapClient.connect(config);
 
 The configuration format and method signatures are compatible with imap-simple.
 
-## Examples
+## Try it against your own mailbox
 
-### Gmail Viewer
+Two ways in, depending on whether you want to see the library work or see a
+real app built on it.
 
-A complete example application is included in `examples/gmail-viewer/` demonstrating OAuth2 authentication with Gmail.
+<!-- TODO(video): embed the walkthrough video here once recorded. -->
+> 📹 **A video walkthrough is coming.** Until then the written steps below
+> are the complete path.
 
-#### Setup
+### 1. The example app — this is what we test with
+
+`examples/gmail-viewer/` is a full Express app that signs into Gmail over
+OAuth2 and browses your inbox. It is the app we use to exercise this
+library against a live server, so it's the fastest way to confirm things
+work end to end.
 
 ```bash
-cd examples/gmail-viewer
+git clone https://github.com/dyanet/imap.git
+cd imap/examples/gmail-viewer
 npm install
+cp .env.example .env      # then fill in the two Google values below
+npm run dev               # builds and starts on http://localhost:3000
 ```
 
-#### Commands
+| Command | What it does |
+| -------- | ------------- |
+| `npm run dev` | Build then start — the one to use first |
+| `npm run build` | Compile TypeScript to `dist/` |
+| `npm start` | Run an already-built `dist/server.js` |
+| `npm run verify` | Type-check without emitting |
 
-| Command | Description |
-|---------|-------------|
-| `npm run auth` | Perform OAuth2 authorization flow to obtain access tokens |
-| `npm run refresh` | Refresh an expired access token using stored refresh token |
-| `npm start` | Run the Gmail viewer to display recent emails |
-| `npm run dev` | Build and run in one step |
+**Getting the two Google values.** In the
+[Google Cloud Console](https://console.cloud.google.com/apis/credentials):
+create (or pick) a project → enable the **Gmail API** → **Create
+Credentials → OAuth client ID → Web application** → add
+`http://localhost:3000/callback` as an authorised redirect URI. Copy the
+client ID and secret into `.env` as `GOOGLE_CLIENT_ID` and
+`GOOGLE_CLIENT_SECRET`, then open `http://localhost:3000` and sign in.
 
-#### Quick Start
+Full detail, including deployment, is in
+[`examples/gmail-viewer/README.md`](./examples/gmail-viewer/README.md).
 
-1. Create OAuth2 credentials in [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
-2. Run `npm run auth` to authorize and get tokens
-3. Run `npm start` to view your emails
+**On Outlook:** the example app as shipped is Gmail-only — its OAuth flow
+is hard-coded to Google's endpoints. Pointing it at Outlook means
+registering an app in Microsoft Entra ID and swapping the authorise/token
+URLs and scopes. The library underneath is provider-agnostic; see below.
 
-See `examples/gmail-viewer/README.md` for detailed setup instructions.
+### 2. The library directly, against Gmail or Outlook
+
+`ImapConfig` takes any host and either a password or XOAUTH2, so no
+example app is needed to try a mailbox.
+
+**Gmail** — the quickest route, because Google still accepts app passwords
+for IMAP. Turn on 2-Step Verification, then create one at
+[myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords):
+
+```typescript
+import { ImapClient } from '@dyanet/imap';
+
+const client = new ImapClient({
+  imap: {
+    host: 'imap.gmail.com',
+    port: 993,
+    user: 'you@gmail.com',
+    password: 'your-16-char-app-password',  // not your account password
+    tls: true,
+  },
+});
+
+await client.connect();
+const box = await client.openBox('INBOX');
+console.log(`${box.messages.total} messages`);
+await client.end();
+```
+
+**Outlook / Microsoft 365** — **app passwords do not work here any more.**
+Microsoft finished disabling Basic Authentication for IMAP, POP and SMTP
+during 2026; app passwords depend on it, stopped functioning, and cannot be
+regenerated. OAuth2 is the only route in, so Outlook needs `xoauth2` rather
+than `password`:
+
+```typescript
+const client = new ImapClient({
+  imap: {
+    // Microsoft 365 / work accounts. Personal outlook.com and hotmail.com
+    // mailboxes use imap-mail.outlook.com.
+    host: 'outlook.office365.com',
+    port: 993,
+    user: 'you@yourdomain.com',
+    xoauth2: {
+      user: 'you@yourdomain.com',
+      accessToken: entraAccessToken,   // from Microsoft Entra ID
+    },
+    tls: true,
+  },
+});
+```
+
+Get `entraAccessToken` by registering an application in **Microsoft Entra
+ID**, granting it the `IMAP.AccessAsUser.All` delegated permission, and
+running the standard authorisation-code flow. See
+[Microsoft's IMAP OAuth2 guide](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth).
+
+### 3. No mailbox needed
+
+[**imap-demo.dyanet.workers.dev**](https://imap-demo.dyanet.workers.dev)
+runs this library's MIME and RFC 2047 header parsing in the browser — paste
+raw headers and watch them decode. Nothing to install and no account
+required.
 
 ## TypeScript Support
 
