@@ -27,16 +27,26 @@ export default defineConfig({
     },
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'json', 'html'],
+      // json-summary feeds scripts/coverage-badge.mjs.
+      reporter: ['text', 'json', 'json-summary', 'html'],
       include: ['src/**/*.ts'],
       exclude: ['src/**/*.d.ts'],
+      // These go directly under `thresholds`. They used to be nested in a
+      // `global: { ... }` object, which Vitest does not treat as a special
+      // key -- unrecognised keys here are glob patterns for per-file
+      // thresholds, so `global` matched no files and enforced nothing. The
+      // gate had been silently inert: the declared floor was 61% lines
+      // while actual coverage sat at 53%, and `test:coverage` passed
+      // regardless.
+      //
+      // Set just under the current real numbers so the gate is honest and
+      // ratchets against regression. Raise them as coverage improves --
+      // the old 61/75/71 were aspirations, not measurements.
       thresholds: {
-        global: {
-          statements: 61,
-          branches: 75,
-          functions: 71,
-          lines: 61
-        }
+        statements: 52,
+        branches: 49,
+        functions: 53,
+        lines: 52
       }
     }
   }
