@@ -73,7 +73,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "prepublishOnly": "npm run prod:build",
-    "prod:build": "npm test && npm run build"
+    "prod:build": "npm test && npm run build",
+    "coverage:badge": "npm run test:coverage && node scripts/coverage-badge.mjs"
   },
   "keywords": [
     "imap",
