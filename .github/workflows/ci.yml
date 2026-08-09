@@ -3,61 +3,125 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
+    # Issue #22: a Dependabot bump inside examples/gmail-viewer or
+    # examples/gmail-viewer-cdk used to run this whole workflow -- including
+    # the publish-eligibility job -- even though nothing in the published
+    # package changed. Most of the noise in this repo's Actions history is
+    # exactly that. Example and documentation changes don't affect the
+    # package, so they don't run the package's pipeline.
+    paths-ignore:
+      - "examples/**"
+      - "docs/**"
+      - "**.md"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "examples/**"
+      - "docs/**"
+      - "**.md"
+
+# Cancel a superseded run rather than letting an outdated commit and its
+# replacement both run to completion.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
+      # Report every Node line's real result. With the default (fail-fast:
+      # true) the first failure cancels the rest, so a version-specific
+      # failure hides whether the others would have passed -- which is the
+      # signal a version matrix exists to produce.
+      fail-fast: false
       matrix:
-        node-version: [20, 22, 24]
-    
+        # Every Node line still supported as of August 2026: 22 (Maintenance
+        # LTS), 24 (Active LTS), 26 (Current, Active LTS from October 2026).
+        # 18 and 20 are EOL; `engines.node` was raised to >=22 to match,
+        # because claiming support without CI proof isn't support.
+        node-version: [22, 24, 26]
+
     steps:
-      - uses: actions/checkout@v6
-      
+      - uses: actions/checkout@v7
+
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
-          cache: 'npm'
-      
+          cache: "npm"
+
       - name: Install dependencies
         run: npm ci
-      
+
       - name: Build
         run: npm run build
-      
+
       - name: Run tests
         run: npm test
-      
+
       - name: Run coverage
         run: npm run test:coverage
 
+  # Publishing runs only off an explicit `v*` tag, never off every push to
+  # main.
+  #
+  # This is the root cause of most of this repo's CI failure history. The
+  # old `publish` job was gated on `github.ref == 'refs/heads/main' &&
+  # github.event_name == 'push'`, so it ran on every commit -- but
+  # package.json's version only changes at release time, and GitHub
+  # Packages rejects re-publishing an existing version. Every push between
+  # releases therefore failed on the publish step, which is why 25+ runs in
+  # the visible history are red (e.g. run #38, whose only failing step was
+  # publish).
+  #
+  # Tag-gating means a publish happens exactly when someone deliberately
+  # cuts a release: bump the version, `git tag vX.Y.Z`, push the tag.
   publish:
     needs: test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: read
       packages: write
-    
+
     steps:
-      - uses: actions/checkout@v6
-      
-      - name: Use Node.js 20
-        uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+
+      # Registry target is unchanged: this package publishes to GitHub
+      # Packages, not npmjs.com, authenticated with the workflow's own
+      # GITHUB_TOKEN via `packages: write`.
+      - name: Use Node.js 24
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
-          registry-url: 'https://npm.pkg.github.com'
-          cache: 'npm'
-      
+          node-version: 24
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@dyanet"
+          cache: "npm"
+
       - name: Install dependencies
         run: npm ci
-      
-      - name: Build
-        run: npm run build
-      
+
+      - name: Verify tag matches package.json version
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag v$TAG_VERSION does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
+      # `prod:build` runs the unit and property suites before compiling
+      # (issue #23). `needs: test` already blocks a broken commit from
+      # reaching this job; running them again here means the artifact that
+      # actually gets published was built from a tested tree, whichever
+      # path led to the publish.
+      - name: Build for production (tests then compile)
+        run: npm run prod:build
+
       - name: Publish to GitHub Packages
         run: npm publish
         env:

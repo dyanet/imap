@@ -87,12 +87,54 @@ const listResponseArb = mailboxInfoArb.map(info => ({
   raw: `* LIST (${info.attributes.join(' ')}) "${info.delimiter}" "${info.name}"`
 }));
 
+/**
+ * Generates a *set* of LIST responses the way a server would actually send
+ * one: a single hierarchy delimiter shared by every mailbox, and no mailbox
+ * listed twice.
+ *
+ * Generating an independent delimiter per mailbox (as `listResponseArb`
+ * does) produces sets no real server emits -- e.g. `X` with delimiter `|`
+ * alongside `X/A` with delimiter `/`. Those two names land on the *same*
+ * tree node: `X/A` creates `X` as an intermediate, then `X` arrives as a
+ * leaf and overwrites its attributes. The tree is keyed by path, so it
+ * physically cannot preserve both, and the property below -- "every
+ * response survives intact" -- is unsatisfiable for such input. That made
+ * the property fail for roughly one seed in thirty, which is why CI went
+ * red intermittently on PRs that changed nothing relevant.
+ *
+ * The delimiter is a property of the namespace, not of an individual
+ * mailbox, so sharing it here is the realistic model, not a workaround.
+ * Duplicate names are excluded for the same reason: a LIST response names
+ * each mailbox once.
+ */
+const listResponseSetArb = delimiterArb.chain(delimiter =>
+  fc.uniqueArray(
+    fc.record({
+      attributes: fc.array(mailboxAttributeArb, { minLength: 0, maxLength: 3 }),
+      name: mailboxNameArb(delimiter)
+    }).map(({ attributes, name }) => ({
+      type: 'LIST' as const,
+      data: {
+        attributes,
+        delimiter: delimiter || '/',
+        name
+      },
+      raw: `* LIST (${attributes.join(' ')}) "${delimiter || '/'}" "${name}"`
+    })),
+    {
+      minLength: 1,
+      maxLength: 5,
+      selector: response => response.data.name
+    }
+  )
+);
+
 describe('Property 8: Mailbox List Parsing', () => {
   describe('ResponseParser.parseListResponse', () => {
     it('parses UntaggedResponse objects into MailboxTree with correct structure', () => {
       fc.assert(
         fc.property(
-          fc.array(listResponseArb, { minLength: 1, maxLength: 5 }),
+          listResponseSetArb,
           (responses) => {
             const tree = ResponseParser.parseListResponse(responses);
             
