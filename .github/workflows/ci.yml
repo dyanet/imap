@@ -66,46 +66,22 @@ jobs:
       - name: Run coverage
         run: npm run test:coverage
 
-  # Keeps .github/badges/coverage.svg in step with the real number.
-  #
-  # Its own job rather than a step in `test` because it needs
-  # `contents: write` to push, and the test matrix should stay read-only --
-  # three legs with write access racing to commit the same file is both a
-  # privilege and a correctness problem.
-  coverage-badge:
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Use Node.js 24
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: "npm"
-
-      - run: npm ci
-
-      - run: npm run test:coverage
-
-      # `[skip ci]` is load-bearing: without it this push retriggers the
-      # workflow, which pushes again, forever.
-      - name: Commit badge if the number moved
+      # Reports badge drift without failing, and deliberately does not
+      # commit. Two reasons it can't: this repo's ruleset requires changes
+      # to main to go through a pull request, so a push from CI is rejected
+      # with GH013; and coverage here moves ~0.5pp between runs because the
+      # property tests generate fresh cases each time, so an auto-committing
+      # badge would churn indefinitely. Refresh with `npm run coverage:badge`.
+      - name: Check coverage badge is current (Node 24 only)
+        if: matrix.node-version == 24
         run: |
           node scripts/coverage-badge.mjs
           if git diff --quiet -- .github/badges/coverage.svg; then
-            echo "coverage unchanged - nothing to commit"
-            exit 0
+            echo "coverage badge is current"
+          else
+            echo "::notice::Coverage moved since the badge was generated. Run \`npm run coverage:badge\` and commit .github/badges/coverage.svg."
+            git --no-pager diff --stat -- .github/badges/coverage.svg
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/badges/coverage.svg
-          git commit -m "Update coverage badge [skip ci]"
-          git push
 
   # Publishing runs only off an explicit `v*` tag, never off every push to
   # main.
