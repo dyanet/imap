@@ -97,6 +97,33 @@
       .decoded { color: var(--ok); }
       .raw { color: var(--muted); text-decoration: line-through; }
       .err { color: var(--bad); font-size: 13px; }
+      h3.step {
+        font-size: 13px;
+        margin: 22px 0 6px;
+        color: var(--accent);
+        letter-spacing: 0.01em;
+      }
+      .video-note {
+        padding: 11px 14px;
+        border: 1px dashed var(--line);
+        border-radius: 7px;
+        background: var(--code-bg);
+        color: var(--muted);
+        font-size: 13px;
+        margin-bottom: 4px;
+      }
+      .video-note strong { color: var(--ink); }
+      pre.cmd {
+        margin: 0;
+        background: var(--code-bg);
+        border-radius: 7px;
+        padding: 13px 15px;
+        overflow-x: auto;
+        font-size: 13px;
+        line-height: 1.55;
+      }
+      pre.cmd code { color: var(--ink); }
+      section a { color: var(--accent); }
       footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
       footer code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
       footer a { color: var(--accent); }
@@ -150,6 +177,70 @@
           what drives multipart splitting.
         </p>
         <div class="out"><div id="ctype-out"></div></div>
+      </section>
+
+      <section>
+        <h2>Test it against a real mailbox</h2>
+        <p class="sub">
+          This page only exercises the parsers. To drive the actual IMAP
+          client against your own inbox, use the example app — it's what we
+          test the library with.
+        </p>
+
+        <div class="video-note" id="video-note">
+          📹 <strong>A video walkthrough is coming.</strong> Until then the
+          steps below are the complete path.
+        </div>
+
+        <h3 class="step">1 · Get the example app running</h3>
+        <pre class="cmd"><code>git clone https://github.com/dyanet/imap.git
+cd imap/examples/gmail-viewer
+npm install
+cp .env.example .env
+npm run dev</code></pre>
+        <p class="sub">
+          Then open <code>http://localhost:3000</code>. You need two values
+          in <code>.env</code>: <code>GOOGLE_CLIENT_ID</code> and
+          <code>GOOGLE_CLIENT_SECRET</code>.
+        </p>
+
+        <h3 class="step">2 · Gmail</h3>
+        <p class="sub">
+          In the
+          <a href="https://console.cloud.google.com/apis/credentials">Google Cloud Console</a>:
+          enable the <strong>Gmail API</strong>, then create an
+          <strong>OAuth client ID → Web application</strong> with
+          <code>http://localhost:3000/callback</code> as an authorised
+          redirect URI. Paste the two values into <code>.env</code> and sign
+          in.
+        </p>
+        <p class="sub">
+          Prefer to skip the app entirely? Gmail still accepts
+          <a href="https://myaccount.google.com/apppasswords">app passwords</a>
+          for IMAP once 2-Step Verification is on — point the library at
+          <code>imap.gmail.com:993</code> with <code>password</code> set and
+          you're connected in about five lines.
+        </p>
+
+        <h3 class="step">3 · Outlook / Microsoft 365</h3>
+        <p class="sub">
+          <strong>App passwords no longer work for Outlook.</strong>
+          Microsoft finished disabling Basic Authentication for IMAP during
+          2026; app passwords depended on it and cannot be regenerated.
+          OAuth2 is the only way in, so use the library's
+          <code>xoauth2</code> option with an access token from
+          <a href="https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth">Microsoft Entra ID</a>
+          (delegated permission <code>IMAP.AccessAsUser.All</code>). Host is
+          <code>outlook.office365.com:993</code> for work accounts,
+          <code>imap-mail.outlook.com:993</code> for personal ones.
+        </p>
+        <p class="sub">
+          The example app itself is Gmail-only as shipped — its OAuth flow
+          is hard-coded to Google's endpoints. The library underneath is
+          provider-agnostic; see the
+          <a href="https://github.com/dyanet/imap#try-it-against-your-own-mailbox">README</a>
+          for the Outlook config.
+        </p>
       </section>
 
       <footer>
