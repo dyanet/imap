@@ -139,7 +139,55 @@ jobs:
       - name: Build for production (tests then compile)
         run: npm run prod:build
 
+      # Both steps check first and skip if that exact version already
+      # exists, so re-running a release tag is a no-op rather than a fatal
+      # "cannot publish over the previously published versions".
       - name: Publish to GitHub Packages
-        run: npm publish
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          NAME=$(node -p "require('./package.json').name")
+          if npm view "$NAME@$VERSION" version --registry=https://npm.pkg.github.com >/dev/null 2>&1; then
+            echo "::notice::$NAME@$VERSION is already on GitHub Packages - skipping."
+          else
+            npm publish --registry=https://npm.pkg.github.com
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # This package is on npmjs too (0.5.2 and earlier), so a release that
+      # only reaches GitHub Packages leaves the two registries drifting.
+      #
+      # Writes its own npmrc rather than passing --registry: setup-node put
+      # `@dyanet:registry=https://npm.pkg.github.com` in the default npmrc,
+      # and for a *scoped* package that mapping beats the --registry flag --
+      # the same trap sent a tarball to the wrong host in dyanet/iso-date.
+      #
+      # Skips with a notice when NPM_TOKEN is absent rather than failing the
+      # release, since GitHub Packages has already succeeded by then.
+      - name: Publish to npmjs
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::notice::NPM_TOKEN is not set - skipping the npmjs publish. Set it to keep npmjs in step with GitHub Packages."
+            exit 0
+          fi
+
+          NPMRC="$RUNNER_TEMP/.npmrc-npmjs"
+          umask 077
+          {
+            echo "registry=https://registry.npmjs.org/"
+            echo "@dyanet:registry=https://registry.npmjs.org/"
+            echo "//registry.npmjs.org/:_authToken=$NODE_AUTH_TOKEN"
+          } > "$NPMRC"
+
+          VERSION=$(node -p "require('./package.json').version")
+          NAME=$(node -p "require('./package.json').name")
+
+          if npm view "$NAME@$VERSION" version --userconfig "$NPMRC" >/dev/null 2>&1; then
+            echo "::notice::$NAME@$VERSION is already on npmjs - skipping."
+          else
+            npm publish --userconfig "$NPMRC" --access public
+          fi
+
+          rm -f "$NPMRC"

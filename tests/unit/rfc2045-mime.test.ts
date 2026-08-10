@@ -467,6 +467,24 @@ describe('RFC 2822 Header Parsing', () => {
       const value = 'text/plain; CHARSET=utf-8';
       expect(extractHeaderParam(value, 'charset')).toBe('utf-8');
     });
+
+    it('should not match parameter name as a substring of another parameter', () => {
+      // Looking up "name" must not match inside "filename"
+      const value = 'attachment; filename=secret.pdf';
+      expect(extractHeaderParam(value, 'name')).toBeUndefined();
+    });
+
+    it('should escape regex metacharacters in the parameter name', () => {
+      // A "." in the param name must be treated literally, not as "any char"
+      const value = 'foo; ab=other; a.b=correct';
+      expect(extractHeaderParam(value, 'a.b')).toBe('correct');
+    });
+
+    it('should stop unquoted values at the parameter separator', () => {
+      const value = 'attachment; filename=doc.pdf; size=1024';
+      expect(extractHeaderParam(value, 'filename')).toBe('doc.pdf');
+      expect(extractHeaderParam(value, 'size')).toBe('1024');
+    });
   });
 });
 
