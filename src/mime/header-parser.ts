@@ -148,13 +148,18 @@ export function parseHeaders(headerBlock: string): Headers {
  * @returns Parameter value or undefined
  */
 export function extractHeaderParam(headerValue: string, paramName: string): string | undefined {
-  // Match parameter with optional quotes
+  // Match parameter with optional quotes, anchored to a token boundary so that
+  // looking up "name" does not match inside "filename=...".
   // Format: paramName=value or paramName="value"
+  // - Escape regex metacharacters in paramName.
+  // - Use (^|[;\\s]) before the name to anchor to the start of a parameter.
+  // - For unquoted values, stop at whitespace or ';' (parameter separator).
+  const escaped = paramName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const pattern = new RegExp(
-    `${paramName}\\s*=\\s*(?:"([^"]*)"|(\\S+))`,
+    `(?:^|[;\\s])${escaped}\\s*=\\s*(?:"([^"]*)"|([^;\\s]+))`,
     'i'
   );
-  
+
   const match = headerValue.match(pattern);
   if (match) {
     return match[1] ?? match[2];
