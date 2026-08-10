@@ -1,0 +1,90 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  id-token: write   # Required for npm OIDC provenance
+  contents: read
+
+jobs:
+  determine-publish:
+    runs-on: ubuntu-latest
+    outputs:
+      should-publish: ${{ steps.check.outputs.should-publish }}
+      local-version: ${{ steps.check.outputs.local-version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Check if package needs publishing
+        id: check
+        run: |
+          # Compare semver versions: returns true if v1 > v2
+          version_gt() {
+            test "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" != "$1"
+          }
+
+          name=$(node -p "require('./package.json').name")
+          local_version=$(node -p "require('./package.json').version")
+
+          # Get published version from npm (returns empty if not published)
+          published_version=$(npm view "${name}" version 2>/dev/null || echo "")
+
+          echo "Package: ${name}"
+          echo "  Local version: ${local_version}"
+          echo "  Published version: ${published_version:-none}"
+          echo "local-version=${local_version}" >> $GITHUB_OUTPUT
+
+          if [ -z "$published_version" ]; then
+            echo "  -> Not yet published, needs publishing"
+            echo "should-publish=true" >> $GITHUB_OUTPUT
+          elif version_gt "$local_version" "$published_version"; then
+            echo "  -> Local version is higher, needs publishing"
+            echo "should-publish=true" >> $GITHUB_OUTPUT
+          else
+            echo "  -> Published version is same or higher, skipping"
+            echo "should-publish=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Verify tag matches package version
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          local_version="${{ steps.check.outputs.local-version }}"
+          if [ "$tag_version" != "$local_version" ]; then
+            echo "Tag version (${tag_version}) does not match package.json version (${local_version})"
+            exit 1
+          fi
+
+  publish:
+    needs: determine-publish
+    if: needs.determine-publish.outputs.should-publish == 'true'
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Publish with provenance (OIDC)
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

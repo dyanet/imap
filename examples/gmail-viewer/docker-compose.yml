@@ -1,0 +1,29 @@
+# mail-example (Gmail Viewer example app) — single-host stack. Installed to
+# /opt/mail-example by deploy/deploy.sh and run from there. Same mechanism as
+# sesgun and qpedia-pvt: the image is prebuilt in CI and pushed to GHCR; this
+# host only pulls + runs the pinned tag (no build here).
+#
+# Ingress: this stack never binds 80/443. The shared `ingress-caddy` project
+# (deployed once per host) terminates TLS and reaches this app by the
+# `mail-example-app` alias on the external `ingress` network — see deploy.sh.
+# demo.dyanet.com hosts several /examples/* apps, so this app's route is a
+# path-scoped snippet (not a whole-domain file); the app strips its own
+# BASE_URL path prefix internally, so Caddy forwards the full path unchanged.
+#
+# Naming rule: services and volumes are app-prefixed.
+services:
+  mail-example-app:
+    image: ghcr.io/dyanet/mail-example:${APP_TAG:-latest}
+    env_file: ./data/env
+    ports:
+      - "127.0.0.1:3000:3000"   # local only, for debugging
+    restart: unless-stopped
+    networks:
+      default: {}
+      ingress:
+        aliases: [mail-example-app]
+
+networks:
+  ingress:
+    external: true
+    name: ingress

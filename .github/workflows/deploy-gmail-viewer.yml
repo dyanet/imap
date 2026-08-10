@@ -1,0 +1,139 @@
+name: Deploy (gmail-viewer)
+
+# Single-node deploy of the examples/gmail-viewer app. Same mechanism as
+# sesgun / qpedia-pvt: build once here on the runner, push to GHCR, the
+# server pulls the pinned tag and reconciles via deploy/deploy.sh. No build
+# happens on the server.
+#
+# Ingress: this app never binds 80/443. demo.dyanet.com hosts several
+# /examples/* apps, so deploy.sh registers a path-scoped route snippet with
+# the shared ingress-caddy container rather than owning the whole domain;
+# that container must already be deployed on the target host (see the
+# `ingress` repo).
+#
+# Required secrets:
+#   DEPLOY_SSH_KEY    SSH private key; public half on the target host.
+#   DEPLOY_HOST       the target host IP/hostname.
+#   DEPLOY_USER       SSH user (root, or passwordless sudoer).
+#   PROD_ENV_FILE     contents of /opt/mail-example/data/env. MUST include
+#                      GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, SESSION_SECRET,
+#                      BASE_URL (e.g. https://demo.dyanet.com/examples/gmail-viewer),
+#                      PORT=3000, NODE_ENV=production.
+#   GHCR_PULL_TOKEN   read:packages PAT for the SERVER to pull the image.
+#                      Optional if the ghcr.io/dyanet/mail-example package is public.
+#   GHCR_USER         pull-token owner. Optional; defaults to repo owner.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'examples/gmail-viewer/**'
+      - '.github/workflows/deploy-gmail-viewer.yml'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Ref to deploy. Blank = this commit."
+        required: false
+        default: ""
+
+concurrency:
+  group: deploy-gmail-viewer
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      app_tag: ${{ steps.meta.outputs.app_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Resolve app tag
+        id: meta
+        run: echo "app_tag=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push app image
+        uses: docker/build-push-action@v7
+        with:
+          context: examples/gmail-viewer
+          push: true
+          tags: |
+            ghcr.io/dyanet/mail-example:latest
+            ghcr.io/dyanet/mail-example:${{ steps.meta.outputs.app_tag }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production # optional: add approval/protection rules in repo settings
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Deploy over SSH
+        env:
+          # SSH **private** key (no passphrase). Public half goes in the
+          # server user's authorized_keys. Secrets pass via env (not
+          # interpolated into the script) to avoid injection.
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+          GHCR_USER: ${{ secrets.GHCR_USER || github.repository_owner }}
+          APP_TAG: ${{ needs.build.outputs.app_tag }}
+        run: |
+          set -euo pipefail
+          test -n "${HOST:-}"           || { echo "secret DEPLOY_HOST is not set"; exit 1; }
+          test -n "${USER:-}"           || { echo "secret DEPLOY_USER is not set"; exit 1; }
+          test -n "${DEPLOY_SSH_KEY:-}" || { echo "secret DEPLOY_SSH_KEY is not set"; exit 1; }
+
+          KEY="$HOME/.ssh/deploy_key"
+          install -d -m 700 "$HOME/.ssh"
+          # tr -d '\r': a key pasted from Windows often carries CRLF, which
+          # makes OpenSSH fail with "error in libcrypto".
+          printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' > "$KEY"
+          chmod 600 "$KEY"
+          grep -q "PRIVATE KEY" "$KEY" || {
+            echo "DEPLOY_SSH_KEY is not a private key (no 'PRIVATE KEY' header)."
+            echo "Paste the PRIVATE key, not the .pub."
+            exit 1
+          }
+
+          printf '%s' "$PROD_ENV_FILE" > mail-example.env
+          test -s mail-example.env || { echo "secret PROD_ENV_FILE is empty"; exit 1; }
+
+          printf '%s' "${GHCR_PULL_TOKEN:-}" > ghcr.token
+
+          SSH_OPTS="-i $KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 -o ServerAliveInterval=30 -o ServerAliveCountMax=240"
+
+          echo "Copying deploy script + compose file + env to $HOST"
+          scp $SSH_OPTS examples/gmail-viewer/deploy/deploy.sh         "$USER@$HOST:/tmp/mail-example-deploy.sh"
+          scp $SSH_OPTS examples/gmail-viewer/docker-compose.yml       "$USER@$HOST:/tmp/mail-example-compose.yml"
+          scp $SSH_OPTS mail-example.env                               "$USER@$HOST:/tmp/mail-example.env"
+          rm -f mail-example.env
+
+          # Only pass GHCR_TOKEN_FILE if we actually transferred a token;
+          # otherwise deploy.sh assumes the image/package is public.
+          REMOTE_ENV="ENV_SRC=/tmp/mail-example.env COMPOSE_SRC=/tmp/mail-example-compose.yml APP_TAG='$APP_TAG' GHCR_USER='$GHCR_USER'"
+          if [ -s ghcr.token ]; then
+            scp $SSH_OPTS ghcr.token "$USER@$HOST:/tmp/mail-example-ghcr.token"
+            REMOTE_ENV="$REMOTE_ENV GHCR_TOKEN_FILE=/tmp/mail-example-ghcr.token"
+          fi
+          rm -f ghcr.token
+
+          echo "Running deploy on $HOST"
+          ssh $SSH_OPTS "$USER@$HOST" "$REMOTE_ENV bash /tmp/mail-example-deploy.sh"
