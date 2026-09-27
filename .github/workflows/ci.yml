@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release/**"]
     tags: ["v*"]
     # Issue #22: a Dependabot bump inside examples/gmail-viewer or
     # examples/gmail-viewer-cdk used to run this whole workflow -- including
@@ -15,7 +15,7 @@ on:
       - "docs/**"
       - "**.md"
   pull_request:
-    branches: [main]
+    branches: [main, "release/**"]
     paths-ignore:
       - "examples/**"
       - "docs/**"
@@ -115,7 +115,7 @@ jobs:
     #    over" failure), and a PR that bumps the version releases on merge.
     #    The job tags the commit itself afterwards; a tag pushed with
     #    GITHUB_TOKEN does not re-trigger workflows, so there is no double run.
-    if: startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && github.event_name == 'push')
+    if: startsWith(github.ref, 'refs/tags/v') || ((github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) && github.event_name == 'push')
     permissions:
       contents: write # to tag the release commit
       packages: write
@@ -143,6 +143,21 @@ jobs:
         run: |
           PKG_VERSION=$(node -p "require('./package.json').version")
           echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+
+          # dist-tag: `latest` only if this version is newer than npmjs's
+          # current latest. An older line (e.g. a 2.x fix after 3.0.0) goes
+          # out as `v<major>` so approving it can't move `latest` backwards.
+          # (Read with curl: the @dyanet scope is mapped to GitHub Packages.)
+          NAME=$(node -p "require('./package.json').name")
+          LATEST=$(curl -fsS "https://registry.npmjs.org/${NAME/\//%2f}" 2>/dev/null \
+            | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{process.stdout.write(JSON.parse(s)['dist-tags'].latest||'')}catch{}})" || true)
+          if [ -n "$LATEST" ] && npx -y semver -r "<$LATEST" "$PKG_VERSION" >/dev/null; then
+            DIST_TAG="v${PKG_VERSION%%.*}"
+          else
+            DIST_TAG=latest
+          fi
+          echo "npmjs latest: ${LATEST:-none}; releasing $PKG_VERSION with dist-tag '$DIST_TAG'"
+          echo "dist_tag=$DIST_TAG" >> "$GITHUB_OUTPUT"
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             TAG_VERSION="${GITHUB_REF#refs/tags/v}"
             if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
@@ -178,7 +193,7 @@ jobs:
           if npm view "$NAME@$VERSION" version --registry=https://npm.pkg.github.com >/dev/null 2>&1; then
             echo "::notice::$NAME@$VERSION is already on GitHub Packages - skipping."
           else
-            npm publish --registry=https://npm.pkg.github.com
+            npm publish --registry=https://npm.pkg.github.com --tag "${{ steps.rel.outputs.dist_tag }}"
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -212,12 +227,12 @@ jobs:
           if npm view "$NAME@$VERSION" version --userconfig "$NPMRC" >/dev/null 2>&1; then
             echo "::notice::$NAME@$VERSION is already published on npmjs - skipping."
           else
-            npm stage publish --userconfig "$NPMRC" --access public --provenance
-            echo "::notice title=Approve on npmjs::$NAME@$VERSION is staged. Approve it at npmjs.com > Staged Packages (2FA), or run: npm stage approve <stage-id>"
+            npm stage publish --userconfig "$NPMRC" --access public --provenance --tag "${{ steps.rel.outputs.dist_tag }}"
+            echo "::notice title=Approve on npmjs::$NAME@$VERSION is staged with dist-tag '${{ steps.rel.outputs.dist_tag }}'. Approve it at npmjs.com > Staged Packages (2FA), or run: npm stage approve <stage-id>"
           fi
 
       - name: Tag the release commit
-        if: steps.rel.outputs.release == 'true' && github.ref == 'refs/heads/main'
+        if: steps.rel.outputs.release == 'true' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))
         run: |
           TAG="v${{ steps.rel.outputs.version }}"
           git config user.name "github-actions[bot]"
