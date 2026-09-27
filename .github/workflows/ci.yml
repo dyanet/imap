@@ -119,6 +119,7 @@ jobs:
     permissions:
       contents: write # to tag the release commit
       packages: write
+      id-token: write # npm Trusted Publishing (OIDC) and provenance
 
     steps:
       - uses: actions/checkout@v7
@@ -190,16 +191,22 @@ jobs:
       # and for a *scoped* package that mapping beats the --registry flag --
       # the same trap sent a tarball to the wrong host in dyanet/iso-date.
       #
-      # Skips with a notice when NPM_TOKEN is absent rather than failing the
-      # release, since GitHub Packages has already succeeded by then.
+      # Auth, in order of preference:
+      #  1. npm Trusted Publishing (OIDC, via `id-token: write` above). Once
+      #     this repo + workflow is registered as a trusted publisher for the
+      #     package on npmjs.com, npm uses it and no long-lived token is
+      #     needed -- so there is nothing to expire. (A granular write token
+      #     expiring is what broke the September 2026 releases.)
+      #  2. The NPM_TOKEN secret, if set.
+      # --provenance links the published tarball to this workflow run.
       - name: Publish to npmjs
         if: steps.rel.outputs.release == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::notice::NPM_TOKEN is not set - skipping the npmjs publish. Set it to keep npmjs in step with GitHub Packages."
-            exit 0
+          # Trusted publishing needs npm >= 11.5.1.
+          if ! npx -y semver -r ">=11.5.1" "$(npm -v)" >/dev/null; then
+            npm install -g npm@^11.5.1
           fi
 
           NPMRC="$RUNNER_TEMP/.npmrc-npmjs"
@@ -207,7 +214,9 @@ jobs:
           {
             echo "registry=https://registry.npmjs.org/"
             echo "@dyanet:registry=https://registry.npmjs.org/"
-            echo "//registry.npmjs.org/:_authToken=$NODE_AUTH_TOKEN"
+            if [ -n "$NODE_AUTH_TOKEN" ]; then
+              echo "//registry.npmjs.org/:_authToken=$NODE_AUTH_TOKEN"
+            fi
           } > "$NPMRC"
 
           VERSION=$(node -p "require('./package.json').version")
@@ -215,8 +224,10 @@ jobs:
 
           if npm view "$NAME@$VERSION" version --userconfig "$NPMRC" >/dev/null 2>&1; then
             echo "::notice::$NAME@$VERSION is already on npmjs - skipping."
-          else
-            npm publish --userconfig "$NPMRC" --access public
+          elif ! npm publish --userconfig "$NPMRC" --access public --provenance; then
+            echo "::error::npmjs rejected the publish. Configure npm Trusted Publishing for $NAME (npmjs.com > package > Settings > Trusted publishing: GitHub Actions, repo ${GITHUB_REPOSITORY}, workflow $(basename "${GITHUB_WORKFLOW_REF%@*}")) or renew the NPM_TOKEN secret, then re-run this job."
+            rm -f "$NPMRC"
+            exit 1
           fi
 
           rm -f "$NPMRC"
