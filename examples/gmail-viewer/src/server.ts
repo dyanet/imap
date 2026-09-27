@@ -1341,7 +1341,7 @@ app.get('/diagnostics/mailboxes-json', requireAuth, async (req, res) => {
 });
 
 app.post('/diagnostics/:action', requireAuth, async (req, res) => {
-  const action = req.params.action;
+  const action = String(req.params.action);
   const params = { ...req.body };  // Copy params for history
 
   try {

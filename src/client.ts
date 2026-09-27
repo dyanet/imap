@@ -1027,32 +1027,51 @@ export class ImapClient extends EventEmitter {
     const raw = response.raw;
     const type = response.type.toUpperCase();
 
+    // Numeric untagged responses (* N EXISTS / EXPUNGE / RECENT) arrive from
+    // the protocol parser as { number, extra }. Earlier code only handled a
+    // bare number, so every IDLE/poll count came out as NaN.
+    const numberOf = (data: unknown): number => {
+      if (typeof data === 'number') return data;
+      if (data && typeof data === 'object' && 'number' in data) {
+        return Number((data as { number: unknown }).number);
+      }
+      return parseInt(String(data), 10);
+    };
+
     // Parse EXISTS: * 23 EXISTS
     if (type === 'EXISTS') {
-      const count = typeof response.data === 'number' ? response.data : parseInt(String(response.data), 10);
-      return { type: 'exists', count, raw };
+      return { type: 'exists', count: numberOf(response.data), raw };
     }
 
     // Parse EXPUNGE: * 3 EXPUNGE
     if (type === 'EXPUNGE') {
-      const seqno = typeof response.data === 'number' ? response.data : parseInt(String(response.data), 10);
-      return { type: 'expunge', seqno, raw };
+      return { type: 'expunge', seqno: numberOf(response.data), raw };
     }
 
     // Parse RECENT: * 5 RECENT
     if (type === 'RECENT') {
-      const count = typeof response.data === 'number' ? response.data : parseInt(String(response.data), 10);
-      return { type: 'recent', count, raw };
+      return { type: 'recent', count: numberOf(response.data), raw };
     }
 
-    // Parse FETCH: * 14 FETCH (FLAGS (\Seen))
+    // Parse FETCH: * 14 FETCH (UID 7 FLAGS (\Seen))
+    // The protocol parser nests the attributes as { seqno, attributes: { UID,
+    // FLAGS } }; a flat { seqno, uid, flags } shape is also accepted.
     if (type === 'FETCH') {
-      const data = response.data as { seqno?: number; flags?: string[]; uid?: number } | undefined;
+      const data = response.data as {
+        seqno?: number;
+        flags?: string[];
+        uid?: number;
+        attributes?: Record<string, unknown>;
+      } | undefined;
+      const attrs = data?.attributes ?? {};
+      const rawUid = data?.uid ?? attrs.UID;
+      const rawFlags = data?.flags ?? attrs.FLAGS;
+      const uid = rawUid === undefined || rawUid === null ? undefined : Number(rawUid);
       return {
         type: 'fetch',
         seqno: data?.seqno,
-        flags: data?.flags,
-        uid: data?.uid,
+        flags: Array.isArray(rawFlags) ? rawFlags.map(String) : undefined,
+        uid: Number.isNaN(uid) ? undefined : uid,
         raw
       };
     }

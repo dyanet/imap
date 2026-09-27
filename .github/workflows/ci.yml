@@ -57,6 +57,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Fails the build on a known high/critical advisory in anything that
+      # ships to users. Dev-only advisories are left to Dependabot so a
+      # test-tool CVE can't block a release of unaffected runtime code.
+      - name: Audit runtime dependencies
+        if: matrix.node-version == 24
+        run: npm audit --omit=dev --audit-level=high
+
       - name: Build
         run: npm run build
 

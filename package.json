@@ -1,6 +1,6 @@
 {
   "name": "@dyanet/imap",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "A modern, zero-dependency TypeScript IMAP client library - drop-in replacement for imap-simple and imap packages",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -107,11 +107,11 @@
   },
   "homepage": "https://github.com/dyanet/imap#readme",
   "devDependencies": {
-    "@types/node": "^20.10.0",
-    "@vitest/coverage-v8": "^4.1.10",
-    "fast-check": "^3.15.0",
+    "@types/node": "^22.20.4",
+    "@vitest/coverage-v8": "^5.0.2",
+    "fast-check": "^3.23.2",
     "typescript": "^5.3.0",
-    "vitest": "^4.1.10"
+    "vitest": "^5.0.2"
   },
   "engines": {
     "node": ">=22.0.0"
