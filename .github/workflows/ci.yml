@@ -191,46 +191,30 @@ jobs:
       # and for a *scoped* package that mapping beats the --registry flag --
       # the same trap sent a tarball to the wrong host in dyanet/iso-date.
       #
-      # Auth, in order of preference:
-      #  1. npm Trusted Publishing (OIDC, via `id-token: write` above). Once
-      #     this repo + workflow is registered as a trusted publisher for the
-      #     package on npmjs.com, npm uses it and no long-lived token is
-      #     needed -- so there is nothing to expire. (A granular write token
-      #     expiring is what broke the September 2026 releases.)
-      #  2. The NPM_TOKEN secret, if set.
-      # --provenance links the published tarball to this workflow run.
-      - name: Publish to npmjs
+      # Stages the release on npmjs through npm Trusted Publishing (OIDC, via
+      # `id-token: write`); no token is involved. The trusted publisher for
+      # this package allows staging, not direct publishing, so nothing goes
+      # live until a maintainer approves it with 2FA: npmjs.com > Staged
+      # Packages > Approve, or `npm stage approve <stage-id>`.
+      # `npm stage list` needs a logged-in user, so CI can't see what's already
+      # staged; the release tag pushed below is what stops a re-stage.
+      - name: Stage on npmjs (approve on npmjs.com to publish)
         if: steps.rel.outputs.release == 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          # Trusted publishing needs npm >= 11.5.1.
-          if ! npx -y semver -r ">=11.5.1" "$(npm -v)" >/dev/null; then
-            npm install -g npm@^11.5.1
-          fi
+          npm install -g npm@latest # `npm stage` needs a current npm
 
           NPMRC="$RUNNER_TEMP/.npmrc-npmjs"
-          umask 077
-          {
-            echo "registry=https://registry.npmjs.org/"
-            echo "@dyanet:registry=https://registry.npmjs.org/"
-            if [ -n "$NODE_AUTH_TOKEN" ]; then
-              echo "//registry.npmjs.org/:_authToken=$NODE_AUTH_TOKEN"
-            fi
-          } > "$NPMRC"
+          printf 'registry=https://registry.npmjs.org/\n@dyanet:registry=https://registry.npmjs.org/\n' > "$NPMRC"
 
           VERSION=$(node -p "require('./package.json').version")
           NAME=$(node -p "require('./package.json').name")
 
           if npm view "$NAME@$VERSION" version --userconfig "$NPMRC" >/dev/null 2>&1; then
-            echo "::notice::$NAME@$VERSION is already on npmjs - skipping."
-          elif ! npm publish --userconfig "$NPMRC" --access public --provenance; then
-            echo "::error::npmjs rejected the publish. Configure npm Trusted Publishing for $NAME (npmjs.com > package > Settings > Trusted publishing: GitHub Actions, repo ${GITHUB_REPOSITORY}, workflow $(basename "${GITHUB_WORKFLOW_REF%@*}")) or renew the NPM_TOKEN secret, then re-run this job."
-            rm -f "$NPMRC"
-            exit 1
+            echo "::notice::$NAME@$VERSION is already published on npmjs - skipping."
+          else
+            npm stage publish --userconfig "$NPMRC" --access public --provenance
+            echo "::notice title=Approve on npmjs::$NAME@$VERSION is staged. Approve it at npmjs.com > Staged Packages (2FA), or run: npm stage approve <stage-id>"
           fi
-
-          rm -f "$NPMRC"
 
       - name: Tag the release commit
         if: steps.rel.outputs.release == 'true' && github.ref == 'refs/heads/main'
